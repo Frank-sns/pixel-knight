@@ -146,6 +146,10 @@ let sporeZones = [];       // vine_behemoth spores
 let lightningPillars = []; // thunder_lord pillars
 let stoneWalls = [];       // ancient_golem walls
 
+// === DROPS & SHOP ===
+let drops = [];
+let shopItems = [];
+
 // === UI OVERLAY STATE ===
 let messageQueue = [];
 let flashAlpha = 0;
@@ -1061,6 +1065,30 @@ function renderRoom(ctx, room) {
     ctx.strokeStyle = '#556677';
     ctx.strokeRect(door.x - 14, door.y - 14, 28, 28);
   }
+  // Shopkeeper NPC in shop rooms
+  if (room.type === ROOM_TYPE.SHOP) {
+    const sx = room.cx, sy = room.cy + 40;
+    ctx.save();
+    ctx.translate(sx, sy);
+    // Body
+    ctx.fillStyle = '#8866cc';
+    ctx.fillRect(-10, -12, 20, 24);
+    // Head
+    ctx.fillStyle = '#ccaa88';
+    ctx.beginPath();
+    ctx.arc(0, -8, 9, 0, Math.PI * 2);
+    ctx.fill();
+    // Pointed hat
+    ctx.fillStyle = '#6644aa';
+    ctx.fillRect(-7, -20, 14, 5);
+    ctx.fillRect(-11, -14, 22, 3);
+    ctx.restore();
+    // Label
+    ctx.fillStyle = '#ccaa88';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('🎩 商人', room.cx, room.cy + 75);
+  }
 }
 
 // === ROOM TRANSITIONS ===
@@ -1199,30 +1227,87 @@ function renderEnemyBullets(ctx) {
 }
 
 // === LOOT DROP ===
-function spawnDrop(x, y, dropTypeOverride) {
-  const dropType = dropTypeOverride || (Math.random() < 0.5 ? 'coins' : 'heart');
-  if (dropType === 'coins') {
-    player.coins += randInt(3, 8);
-  } else {
-    player.hp = Math.min(player.maxHp, player.hp + 1);
+function spawnDrop(x, y, type) {
+  const item = { x, y, type, life: 30 };
+  if (type === 'heart') { item.emoji = '❤️'; item.color = '#ff4444'; }
+  else if (type === 'coin_pile') { item.emoji = '💰'; item.amount = 5+randInt(0,10); item.color = '#ffdd00'; }
+  else if (type === 'energy') { item.emoji = '⚡'; item.color = '#44aaff'; }
+  else if (type === 'weapon') { /* filled by spawnRandomWeapon */ }
+  drops.push(item);
+}
+
+function spawnRandomWeapon(x, y) {
+  const wTypes = Object.keys(WEAPONS);
+  const wType = wTypes[randInt(0, wTypes.length-1)];
+  const hasAffix = Math.random() < 0.6;
+  const affix = hasAffix ? Object.keys(AFFIXES)[randInt(0, Object.keys(AFFIXES).length-1)] : null;
+  drops.push({
+    x, y, type: 'weapon',
+    weaponType: wType,
+    affix,
+    emoji: WEAPONS[wType].emoji,
+    color: affix ? AFFIXES[affix].color : WEAPONS[wType].color,
+    life: 30,
+    name: `${affix ? AFFIXES[affix].name : ''}${WEAPONS[wType].name}`
+  });
+}
+
+function pickupItem(item) {
+  switch (item.type) {
+    case 'heart':
+      player.hp = Math.min(player.maxHp, player.hp + 1);
+      break;
+    case 'coin_pile':
+      player.coins += item.amount;
+      break;
+    case 'energy':
+      player.skillTimer = Math.max(0, player.skillTimer - player.skillCooldown * 0.5);
+      break;
+    case 'weapon':
+      if (player.weapons.length < 2) {
+        player.weapons.push({ type: item.weaponType, affix: item.affix });
+      } else {
+        player.weapons[player.currentWeapon] = { type: item.weaponType, affix: item.affix };
+      }
+      const wInfo = WEAPONS[item.weaponType];
+      const label = (item.affix ? '[' + AFFIXES[item.affix].name + ']' : '') + wInfo.name;
+      showMessage('拾取武器: ' + label, 3000);
+      break;
   }
 }
 
-// === HELPER: Random weapon drop ===
-function spawnRandomWeapon(x, y) {
-  const weaponTypes = Object.keys(WEAPONS).filter(t => t !== 'pistol');
-  if (weaponTypes.length === 0) return;
-  const type = weaponTypes[randInt(0, weaponTypes.length - 1)];
-  const affixKeys = Object.keys(AFFIXES);
-  const affix = Math.random() < 0.4 ? affixKeys[randInt(0, affixKeys.length - 1)] : null;
-  const weaponObj = { type, affix };
-  if (player.weapons.length < 2) {
-    player.weapons.push(weaponObj);
-  } else {
-    player.weapons[player.currentWeapon] = weaponObj;
+function openShop() {
+  gameState = STATE.SHOP;
+  shopItems = [
+    { type:'heart', name:'血包', price:10, emoji:'❤️' },
+    { type:'weapon', name:'普通武器', price:30, weaponType:Object.keys(WEAPONS)[randInt(0,7)], affix:null, emoji:'🔫' },
+    { type:'weapon', name:'附魔武器', price:60, weaponType:Object.keys(WEAPONS)[randInt(0,7)], affix:Object.keys(AFFIXES)[randInt(0,6)], emoji:'✨' },
+    { type:'energy', name:'技能重置', price:15, emoji:'⚡' }
+  ];
+}
+
+function buyShopItem(index) {
+  const item = shopItems[index];
+  if (!item) return;
+  if (player.coins < item.price) return;
+  player.coins -= item.price;
+  switch (item.type) {
+    case 'heart':
+      player.hp = Math.min(player.maxHp, player.hp + 1);
+      break;
+    case 'weapon':
+      if (player.weapons.length < 2) {
+        player.weapons.push({ type: item.weaponType, affix: item.affix });
+      } else {
+        player.weapons[player.currentWeapon] = { type: item.weaponType, affix: item.affix };
+      }
+      break;
+    case 'energy':
+      player.skillTimer = 0;
+      break;
   }
-  const label = WEAPONS[type].emoji + ' ' + WEAPONS[type].name + (affix ? ' [' + AFFIXES[affix].name + ']' : '');
-  showMessage('获得武器: ' + label, 3000);
+  showMessage('购买: ' + item.name, 2000);
+  shopItems.splice(index, 1);
 }
 
 // === HELPER: UI message queue ===
@@ -1531,10 +1616,57 @@ function update(dt) {
     if (messageQueue[i].timer <= 0) messageQueue.splice(i, 1);
   }
 
+  // Update drops lifetime
+  for (let i = drops.length - 1; i >= 0; i--) {
+    drops[i].life -= dt;
+    if (drops[i].life <= 0) drops.splice(i, 1);
+  }
+
   // Weapon switch keys (only when playing)
   if (gameState === STATE.PLAYING || gameState === STATE.BOSS) {
     if (keys['Digit1']) { keys['Digit1'] = false; switchWeapon(0); }
     if (keys['Digit2']) { keys['Digit2'] = false; switchWeapon(1); }
+  }
+
+  // === Shop buying keys (when in shop state) ===
+  if (gameState === STATE.SHOP) {
+    if (keys['Digit1']) { keys['Digit1'] = false; buyShopItem(0); }
+    if (keys['Digit2']) { keys['Digit2'] = false; buyShopItem(1); }
+    if (keys['Digit3']) { keys['Digit3'] = false; buyShopItem(2); }
+    if (keys['Digit4']) { keys['Digit4'] = false; buyShopItem(3); }
+  }
+
+  // === E key: pickup drops / interact with shop / close shop ===
+  if (keys['KeyE']) {
+    keys['KeyE'] = false;
+    if (gameState === STATE.PLAYING) {
+      // Pickup nearby drops
+      for (let i = drops.length - 1; i >= 0; i--) {
+        const d = drops[i];
+        const dx = player.x - d.x, dy = player.y - d.y;
+        if (Math.sqrt(dx*dx + dy*dy) < 40) {
+          pickupItem(d);
+          drops.splice(i, 1);
+        }
+      }
+      // Shop interaction
+      const room = getCurrentRoom();
+      if (room && room.type === ROOM_TYPE.SHOP && !room.cleared) {
+        const sx = room.cx, sy = room.cy + 40;
+        const sdx = player.x - sx, sdy = player.y - sy;
+        if (Math.sqrt(sdx*sdx + sdy*sdy) < 60) {
+          openShop();
+        }
+      }
+    } else if (gameState === STATE.SHOP) {
+      gameState = STATE.PLAYING;
+    }
+  }
+
+  // Escape to close shop
+  if (keys['Escape'] && gameState === STATE.SHOP) {
+    keys['Escape'] = false;
+    gameState = STATE.PLAYING;
   }
 
   player.update(dt);
@@ -1569,12 +1701,17 @@ function update(dt) {
   const room = getCurrentRoom();
   if (room && room.type === ROOM_TYPE.COMBAT && !room.cleared && enemies.filter(e => e.alive).length === 0) {
     room.cleared = true;
-    if (Math.random() < 0.4) spawnDrop(room.cx, room.cy);
+    if (Math.random() < 0.4) {
+      const dt = Math.random() < 0.5 ? 'heart' : 'coin_pile';
+      spawnDrop(room.cx, room.cy, dt);
+    }
   }
 
   // Game over check
   if (player.hp <= 0 && gameState !== STATE.GAMEOVER && gameState !== STATE.VICTORY) {
     gameState = STATE.GAMEOVER;
+    drops = [];
+    shopItems = [];
     boss = null;
     bossBullets = [];
     bossClones = [];
@@ -1608,6 +1745,21 @@ function render() {
     renderStoneWalls(ctx);
     renderBossClones(ctx);
     boss.render(ctx);
+  }
+
+  // Drops rendering
+  for (const d of drops) {
+    if (d.life <= 0) continue;
+    ctx.save();
+    const pulse = 1 + Math.sin(Date.now() / 200 + d.x) * 0.1;
+    ctx.translate(d.x, d.y);
+    ctx.font = (18 * pulse) + 'px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = d.color || '#ffffff';
+    ctx.globalAlpha = Math.min(d.life / 5, 1);
+    ctx.fillText(d.emoji || '?', 0, 0);
+    ctx.restore();
   }
 
   camera.restore(ctx);
@@ -1657,6 +1809,55 @@ function render() {
     ctx.textAlign = 'left';
     ctx.fillText('武器: ' + wd.emoji + ' ' + wd.name + (cwp.affix ? ' [' + AFFIXES[cwp.affix].emoji + ']' : ''), 16, GH - 16);
     ctx.fillText('按 1/2 切换武器', 16, GH - 36);
+  }
+
+  // === SHOP UI ===
+  if (gameState === STATE.SHOP) {
+    ctx.fillStyle = 'rgba(0,0,0,0.85)';
+    ctx.fillRect(0, 0, GW, GH);
+
+    ctx.fillStyle = '#ffcc00';
+    ctx.font = '26px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('=== 商店 SHOP ===', GW/2, 70);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '16px monospace';
+    ctx.fillText('💰 ' + player.coins, GW/2, 100);
+
+    const startY = 140;
+    const itemH = 70;
+    for (let i = 0; i < shopItems.length; i++) {
+      const si = shopItems[i];
+      const iy = startY + i * itemH;
+
+      // Item background
+      ctx.fillStyle = 'rgba(255,255,255,0.08)';
+      ctx.fillRect(GW/2 - 180, iy, 360, itemH - 6);
+
+      // Emoji + Name
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'left';
+      ctx.font = '18px monospace';
+      ctx.fillText(si.emoji + ' ' + si.name, GW/2 - 160, iy + 30);
+
+      // Price
+      ctx.textAlign = 'right';
+      ctx.fillStyle = player.coins >= si.price ? '#ffcc00' : '#ff4444';
+      ctx.fillText(si.price + '💰', GW/2 + 160, iy + 30);
+
+      // Key hint
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#888888';
+      ctx.font = '13px monospace';
+      ctx.fillText('按 ' + (i+1) + ' 键购买', GW/2, iy + 55);
+    }
+
+    // Close hint
+    ctx.fillStyle = '#888888';
+    ctx.font = '14px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('按 E 或 Esc 关闭', GW/2, GH - 50);
   }
 
   // === UI OVERLAYS ===
@@ -1718,6 +1919,8 @@ function initGame() {
   dungeon = generateFloor(1);
   currentRoomIdx = dungeon.startRoomId;
   gameState = STATE.PLAYING;
+  drops = [];
+  shopItems = [];
   enterRoom(currentRoomIdx);
   console.log('Dungeon generated:', dungeon);
 }
