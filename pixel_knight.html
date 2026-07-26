@@ -19,7 +19,56 @@ const TILE = 32;          // tile size for room grid
 
 // === STATE MACHINE ===
 const STATE = { MENU: 'menu', CHAR_SELECT: 'charSelect', PLAYING: 'playing', BOSS: 'boss', SHOP: 'shop', GAMEOVER: 'gameover', VICTORY: 'victory', PAUSED: 'paused' };
-let gameState = STATE.MENU;
+let gameState = STATE.PLAYING;
+
+// === WEAPON DATA ===
+const WEAPONS = {
+  pistol:   { name:'手枪', emoji:'🔫', damage:8,  fireRate:0.4, speed:500, spread:0.02, count:1, pierce:0, color:'#ffcc00', type:'hitscan' },
+  smg:      { name:'冲锋枪', emoji:'🔫', damage:4,  fireRate:0.08, speed:480, spread:0.12, count:1, pierce:0, color:'#ffaa00', type:'hitscan' },
+  rifle:    { name:'步枪', emoji:'🔫', damage:6,  fireRate:0.15, speed:550, spread:0.04, count:1, pierce:0, burstDelay:0.06, burstCount:3, color:'#ff8800', type:'hitscan' },
+  shotgun:  { name:'散弹枪', emoji:'💥', damage:5,  fireRate:0.7, speed:400, spread:0.18, count:5, pierce:0, color:'#ff6600', type:'hitscan' },
+  laser:    { name:'激光枪', emoji:'⚡', damage:12, fireRate:0.5, speed:700, spread:0,    count:1, pierce:3, color:'#00ffcc', type:'beam' },
+  bow:      { name:'弓',   emoji:'🏹', damage:15, fireRate:0.9, speed:600, spread:0.01, count:1, pierce:1, color:'#88ff44', type:'charged' },
+  sword:    { name:'剑',   emoji:'🗡️', damage:10, fireRate:0.35, speed:0,   spread:0,    count:1, pierce:99, color:'#ffffff', type:'melee', arc:Math.PI },
+  staff:    { name:'法杖', emoji:'🔮', damage:9,  fireRate:0.55, speed:350, spread:0.03, count:1, pierce:0, color:'#cc88ff', type:'bounce', bounces:2 }
+};
+
+// === AFFIX DATA ===
+const AFFIXES = {
+  fire:    { name:'火焰', emoji:'🔥', color:'#ff4400', desc:'灼烧DoT 3秒' },
+  ice:     { name:'冰霜', emoji:'❄️', color:'#88ccff', desc:'减速40% 2秒' },
+  lightning:{ name:'雷电', emoji:'⚡', color:'#ffdd00', desc:'击杀弹跳2个敌人' },
+  poison:  { name:'剧毒', emoji:'☠️', color:'#44ff44', desc:'叠3层爆发' },
+  lifesteal:{ name:'吸血', emoji:'💀', color:'#cc44cc', desc:'击杀回0.5❤️' },
+  explosive:{ name:'爆炸', emoji:'💥', color:'#ff2222', desc:'命中AoE爆炸' },
+  knockback:{ name:'击退', emoji:'💨', color:'#ffffff', desc:'击退敌人' }
+};
+
+// === BULLETS ===
+let bullets = [];
+
+function spawnBullet(x, y, angle, wType, affixKey) {
+  const wData = WEAPONS[wType];
+  const count = wData.count || 1;
+  for (let i = 0; i < count; i++) {
+    const spreadAngle = angle + (Math.random() - 0.5) * wData.spread * 2;
+    bullets.push({
+      x, y,
+      vx: Math.cos(spreadAngle) * wData.speed,
+      vy: Math.sin(spreadAngle) * wData.speed,
+      weapon: wType, affix: affixKey,
+      damage: wData.damage * player.buffs.damageMult,
+      pierce: wData.pierce + player.buffs.pierce,
+      color: affixKey ? AFFIXES[affixKey].color : wData.color,
+      life: 3,
+      bounce: wData.bounces || 0,
+      isMelee: wType === 'sword',
+      arc: wData.arc || 0,
+      isBeam: wType === 'laser',
+      poisonStacks: {}
+    });
+  }
+}
 
 // === CANVAS SETUP ===
 const canvas = document.getElementById('game-canvas');
@@ -131,6 +180,9 @@ const player = {
     this.invincible = 0;
     this.weapons = [{ type: 'pistol', affix: null }]; // start pistol
     this.currentWeapon = 0;
+    this.fireTimer = 0;
+    this.burstIndex = 0;
+    this.burstTimer = 0;
   },
 
   update(dt) {
@@ -154,6 +206,28 @@ const player = {
     this.skillTimer = Math.max(0, this.skillTimer - dt);
     // Invincibility
     this.invincible = Math.max(0, this.invincible - dt);
+    // Firing
+    const wp = this.getWeapon();
+    if (wp && mouse.down && gameState === STATE.PLAYING) {
+      const wData = WEAPONS[wp.type];
+      this.fireTimer -= dt;
+      if (this.fireTimer <= 0) {
+        this.fireTimer = wData.fireRate;
+        spawnBullet(this.x, this.y, this.angle, wp.type, wp.affix);
+        if (wData.burstDelay) {
+          this.burstIndex = 1;
+          this.burstTimer = wData.burstDelay;
+        }
+      }
+      if (this.burstIndex > 0 && this.burstIndex < (wData.burstCount || 0)) {
+        this.burstTimer -= dt;
+        if (this.burstTimer <= 0) {
+          spawnBullet(this.x, this.y, this.angle, wp.type, wp.affix);
+          this.burstIndex++;
+          this.burstTimer = wData.burstDelay;
+        }
+      }
+    }
     // Camera follow
     camera.targetX = this.x;
     camera.targetY = this.y;
@@ -201,8 +275,44 @@ const player = {
   }
 };
 
+// === WEAPON SWITCH ===
+function switchWeapon(slot) {
+  if (slot >= 0 && slot < player.weapons.length) {
+    player.currentWeapon = slot;
+    player.fireTimer = 0;
+  }
+}
+
 // Room bounds placeholder — updated when entering a room
 let roomBounds = { x: -200, y: -150, w: 400, h: 300 };
+
+// === BULLET UPDATE / RENDER ===
+function updateBullets(dt) {
+  for (let i = bullets.length - 1; i >= 0; i--) {
+    const b = bullets[i];
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    b.life -= dt;
+    if (b.life <= 0 || b.x < roomBounds.x - 50 || b.x > roomBounds.x + roomBounds.w + 50 ||
+        b.y < roomBounds.y - 50 || b.y > roomBounds.y + roomBounds.h + 50) {
+      bullets.splice(i, 1);
+    }
+  }
+}
+
+function renderBullets(ctx) {
+  for (const b of bullets) {
+    ctx.fillStyle = b.color;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.isMelee ? 0 : 3, 0, Math.PI * 2);
+    ctx.fill();
+    // Glow
+    ctx.fillStyle = b.color.replace('ff','aa');
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, 6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
 
 // === GAME LOOP ===
 let lastTime = 0;
@@ -217,7 +327,11 @@ function gameLoop(timestamp) {
 }
 // Main update/render — player + camera driving the game loop
 function update(dt) {
+  // Weapon switch keys
+  if (keys['Digit1']) { keys['Digit1'] = false; switchWeapon(0); }
+  if (keys['Digit2']) { keys['Digit2'] = false; switchWeapon(1); }
   player.update(dt);
+  updateBullets(dt);
   camera.update(dt);
 }
 function render() {
@@ -246,8 +360,19 @@ function render() {
   ctx.lineWidth = 2;
   ctx.strokeRect(roomBounds.x, roomBounds.y, roomBounds.w, roomBounds.h);
   player.render(ctx);
+  renderBullets(ctx);
   camera.restore(ctx);
   // HUD (screen-space)
+  // Weapon info
+  const cwp = player.getWeapon();
+  if (cwp) {
+    const wd = WEAPONS[cwp.type];
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '14px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('武器: ' + wd.emoji + ' ' + wd.name + (cwp.affix ? ' [' + AFFIXES[cwp.affix].emoji + ']' : ''), 16, GH - 16);
+    ctx.fillText('按 1/2 切换武器', 16, GH - 36);
+  }
 }
 
 player.init('knight');
