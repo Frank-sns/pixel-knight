@@ -46,10 +46,45 @@ canvas.addEventListener('mousemove', e => {
   const scaleY = GH / rect.height;
   mouse.x = (e.clientX - rect.left) * scaleX;
   mouse.y = (e.clientY - rect.top) * scaleY;
+  const wp = camera.screenToWorld(mouse.x, mouse.y);
+  mouse.worldX = wp.x; mouse.worldY = wp.y;
 });
 canvas.addEventListener('mousedown', e => { if (e.button === 0) mouse.down = true; });
 canvas.addEventListener('mouseup', e => { if (e.button === 0) mouse.down = false; });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+// === CAMERA ===
+const camera = {
+  x: 0, y: 0,
+  targetX: 0, targetY: 0,
+  shakeAmount: 0, shakeDecay: 4,
+  update(dt) {
+    // Smooth follow
+    this.x += (this.targetX - this.x) * 8 * dt;
+    this.y += (this.targetY - this.y) * 8 * dt;
+    this.shakeAmount = Math.max(0, this.shakeAmount - this.shakeDecay * dt);
+  },
+  shake(amount) { this.shakeAmount = Math.max(this.shakeAmount, amount); },
+  applyTransform(ctx) {
+    ctx.save();
+    let sx = this.shakeAmount * (Math.random() * 2 - 1);
+    let sy = this.shakeAmount * (Math.random() * 2 - 1);
+    ctx.translate(GW/2 - this.x + sx, GH/2 - this.y + sy);
+  },
+  restore(ctx) { ctx.restore(); },
+  worldToScreen(wx, wy) {
+    return {
+      x: GW/2 + (wx - this.x),
+      y: GH/2 + (wy - this.y)
+    };
+  },
+  screenToWorld(sx, sy) {
+    return {
+      x: this.x + (sx - GW/2),
+      y: this.y + (sy - GH/2)
+    };
+  }
+};
 
 // === GAME LOOP ===
 let lastTime = 0;
@@ -64,7 +99,16 @@ function gameLoop(timestamp) {
 }
 // Stub update/render — will be filled in later tasks
 function update(dt) { /* scene dispatch */ }
-function render() { ctx.clearRect(0, 0, GW, GH); }
+function render() {
+  ctx.clearRect(0, 0, GW, GH);
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(0, 0, GW, GH);
+  // Camera-transformed game rendering goes here
+  camera.applyTransform(ctx);
+  // ... draw game objects ...
+  camera.restore(ctx);
+  // HUD (screen-space) goes here
+}
 
 requestAnimationFrame(gameLoop);
 console.log('Pixel Knight — shell ready');
