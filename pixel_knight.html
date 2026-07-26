@@ -67,10 +67,89 @@ const ENEMY_DATA = {
   golem:    { name:'石像守卫', hp:25, speed:40,  damage:2, radius:15, color:'#888877', floor:3, behavior:'throw_rock', fireRate:2.5, score:35, coins:4 }
 };
 
+// === BOSS DATA ===
+const BOSS_DATA = {
+  goblin_king: {
+    name:'哥布林王', floor:1, hp:80, radius:24, color:'#88aa22',
+    phases: [{ threshold:1.0, attacks:['summon','bomb','charge'], moveSpeed:60 }]
+  },
+  spider_queen: {
+    name:'蛛后', floor:1, hp:70, radius:22, color:'#8844aa',
+    phases: [{ threshold:1.0, attacks:['web','spawn_spiders','ground_pound'], moveSpeed:80 }]
+  },
+  magma_dragon: {
+    name:'熔岩巨龙', floor:2, hp:120, radius:28, color:'#ff4422',
+    phases: [
+      { threshold:1.0, attacks:['fire_cone','tail_swipe','dive'], moveSpeed:50 },
+      { threshold:0.5, attacks:['fire_tracking','tail_swipe','dive'], moveSpeed:70 }
+    ]
+  },
+  shadow_twins: {
+    name:'暗影双子', floor:2, hp:90, radius:16, color:'#664488',
+    phases: [
+      { threshold:1.0, attacks:['twin_slash','twin_bolts'], moveSpeed:90 },
+      { threshold:0.5, attacks:['twin_slash','twin_bolts_enraged'], moveSpeed:130 }
+    ]
+  },
+  vine_behemoth: {
+    name:'藤蔓巨兽', floor:2, hp:100, radius:26, color:'#44aa44',
+    phases: [{ threshold:1.0, attacks:['tentacle','spore_cloud','thorn_ring'], moveSpeed:0 }]
+  },
+  thousand_eye: {
+    name:'千眼魔', floor:3, hp:130, radius:20, color:'#ff4488',
+    phases: [{ threshold:1.0, attacks:['spin_lasers','eye_minions','flash_blind'], moveSpeed:50 }]
+  },
+  thunder_lord: {
+    name:'雷霆领主', floor:3, hp:110, radius:18, color:'#ffdd00',
+    phases: [{ threshold:1.0, attacks:['flash_strike','lightning_pillar','dash_combo'], moveSpeed:200 }]
+  },
+  ancient_golem: {
+    name:'远古石像', floor:3, hp:150, radius:30, color:'#888877',
+    phases: [
+      { threshold:1.0, attacks:['rock_throw','ground_slam','stone_wall'], moveSpeed:30 },
+      { threshold:0.5, attacks:['rock_throw_fast','ground_slam','stone_wall'], moveSpeed:50 }
+    ]
+  },
+  shadow_lord: {
+    name:'暗影领主', floor:3, hp:200, radius:26, color:'#220022',
+    phases: [
+      { threshold:1.0, attacks:['bullet_hell','teleport'], moveSpeed:70 },
+      { threshold:0.66, attacks:['clone','cross_laser'], moveSpeed:90 },
+      { threshold:0.33, attacks:['bullet_hell','fire_aura'], moveSpeed:140 }
+    ]
+  }
+};
+
+// Boss buff drops per floor
+const BOSS_BUFFS = [
+  [{ name:'生命上限+1', apply:()=>{ player.maxHp+=1; player.hp=Math.min(player.hp+1,player.maxHp); }},
+   { name:'移速+15%', apply:()=>{ player.buffs.speedMult+=0.15; }}],
+  [{ name:'伤害+15%', apply:()=>{ player.buffs.damageMult+=0.15; }},
+   { name:'射速+10%', apply:()=>{ player.fireRateMult=(player.fireRateMult||1)*0.9; }},
+   { name:'击杀回血', apply:()=>{ player.buffs.lifesteal=(player.buffs.lifesteal||0)+1; }}],
+  [{ name:'伤害+20%', apply:()=>{ player.buffs.damageMult+=0.20; }},
+   { name:'生命上限+1', apply:()=>{ player.maxHp+=1; player.hp+=1; }},
+   { name:'弹幕穿透+1', apply:()=>{ player.buffs.pierce+=1; }}]
+];
+
 // === BULLETS ===
 let bullets = [];
 let enemies = [];
 let enemyBullets = [];
+
+// === BOSS GLOBALS ===
+let boss = null;
+let bossBullets = [];
+let bossClones = [];        // shadow_lord clones
+let tentacleZones = [];    // vine_behemoth tentacles
+let sporeZones = [];       // vine_behemoth spores
+let lightningPillars = []; // thunder_lord pillars
+let stoneWalls = [];       // ancient_golem walls
+
+// === UI OVERLAY STATE ===
+let messageQueue = [];
+let flashAlpha = 0;
+let slowTimer = 0;
 
 function spawnBullet(x, y, angle, wType, affixKey) {
   const wData = WEAPONS[wType];
@@ -219,7 +298,8 @@ const player = {
     if (keys['KeyD'] || keys['ArrowRight']) this.vx = 1;
     // Normalize diagonal
     if (this.vx !== 0 && this.vy !== 0) { this.vx *= 0.707; this.vy *= 0.707; }
-    const spd = this.speed * this.buffs.speedMult;
+    const slowMult = slowTimer > 0 ? 0.6 : 1;
+    const spd = this.speed * this.buffs.speedMult * slowMult;
     this.x += this.vx * spd * dt;
     this.y += this.vy * spd * dt;
     // Clamp to current room
@@ -233,11 +313,12 @@ const player = {
     this.invincible = Math.max(0, this.invincible - dt);
     // Firing
     const wp = this.getWeapon();
-    if (wp && mouse.down && gameState === STATE.PLAYING) {
+    if (wp && mouse.down && (gameState === STATE.PLAYING || gameState === STATE.BOSS)) {
       const wData = WEAPONS[wp.type];
+      const frMult = this.fireRateMult || 1;
       this.fireTimer -= dt;
       if (this.fireTimer <= 0) {
-        this.fireTimer = wData.fireRate;
+        this.fireTimer = wData.fireRate * frMult;
         spawnBullet(this.x, this.y, this.angle, wp.type, wp.affix);
         if (wData.burstDelay) {
           this.burstIndex = 1;
@@ -385,7 +466,7 @@ function createEnemy(type, x, y) {
     takeDamage(amount) {
       this.hp -= amount;
       this.flashTimer = 0.1;
-      if (this.hp <= 0) { this.alive = false; player.coins += this.coins; }
+      if (this.hp <= 0) { this.alive = false; player.coins += this.coins; if (player.buffs.lifesteal > 0) { player.hp = Math.min(player.maxHp, player.hp + 0.5); } }
     },
 
     explode() {
@@ -428,6 +509,10 @@ function spawnEnemyBullet(x, y, angle, speed, damage, tracking, parabolic) {
   enemyBullets.push({ x, y, vx: Math.cos(angle)*speed, vy: Math.sin(angle)*speed, damage, tracking, parabolic, life: 4 });
 }
 
+function spawnBossBullet(x, y, angle, speed, damage, color, parabolic, tracking) {
+  bossBullets.push({ x, y, vx: Math.cos(angle)*speed, vy: Math.sin(angle)*speed, damage, color, parabolic, tracking, life: 5, baseSpeed: speed });
+}
+
 // === WEAPON SWITCH ===
 function switchWeapon(slot) {
   if (slot >= 0 && slot < player.weapons.length) {
@@ -436,8 +521,391 @@ function switchWeapon(slot) {
   }
 }
 
-// Room bounds — updated when entering a room
-let roomBounds = { x: -200, y: -150, w: 400, h: 300 };
+// === BOSS SYSTEM ===
+function startBossFight(bossType) {
+  const data = BOSS_DATA[bossType];
+  if (!data) return;
+  boss = {
+    type: bossType, name: data.name,
+    x: getCurrentRoom().cx, y: getCurrentRoom().cy - 60,
+    hp: data.hp, maxHp: data.hp,
+    radius: data.radius, color: data.color,
+    speed: data.phases[0].moveSpeed,
+    phase: 0, phases: data.phases,
+    attackTimer: 0, attackCooldown: 1.5,
+    currentAttack: null, attackState: {},
+    angle: 0, alive: true,
+    flashTimer: 0,
+
+    update(dt) {
+      this.flashTimer = Math.max(0, this.flashTimer - dt);
+      this.attackTimer -= dt;
+      // Phase check
+      const hpRatio = this.hp / this.maxHp;
+      for (let i = this.phases.length - 1; i >= 0; i--) {
+        if (hpRatio <= this.phases[i].threshold && i >= this.phase) {
+          this.phase = i;
+          this.speed = this.phases[i].moveSpeed;
+        }
+      }
+      // Move toward player (unless stationary boss like vine_behemoth)
+      if (this.speed > 0) {
+        const dx = player.x - this.x, dy = player.y - this.y;
+        const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+        this.angle = Math.atan2(dy, dx);
+        if (dist > 100) {
+          this.x += Math.cos(this.angle) * this.speed * dt;
+          this.y += Math.sin(this.angle) * this.speed * dt;
+        }
+      }
+      // Pick and execute attack
+      if (this.attackTimer <= 0) { this.pickAttack(); }
+      this.executeAttack(dt);
+    },
+
+    pickAttack() {
+      const attacks = this.phases[this.phase].attacks;
+      this.currentAttack = attacks[randInt(0, attacks.length - 1)];
+      this.attackTimer = 2 + Math.random() * 2;
+      this.attackState = { elapsed: 0 };
+    },
+
+    executeAttack(dt) {
+      this.attackState.elapsed += dt;
+      const t = this.attackState.elapsed;
+      const a = this.currentAttack;
+      // === Shared attack patterns ===
+      if (a === 'bullet_hell' && t < 2) {
+        if (Math.floor(t * 10) % 2 === 0) {
+          for (let i = 0; i < 16; i++) {
+            const ang = (i / 16) * Math.PI * 2 + t;
+            spawnBossBullet(this.x, this.y, ang, 200, 1, '#ff4444');
+          }
+        }
+      }
+      if (a === 'charge' && t < 2) {
+        this.x += Math.cos(this.angle) * 300 * dt;
+        this.y += Math.sin(this.angle) * 300 * dt;
+      }
+      if (a === 'bomb' && t < 3) {
+        if (Math.floor(t * 2) % 2 === 0) {
+          for (let i = 0; i < 5; i++) {
+            spawnBossBullet(this.x, this.y, this.angle + i * 0.4 - 1, 150, 1, '#ff8800');
+          }
+        }
+      }
+      if (a === 'fire_cone' && t < 2) {
+        if (Math.floor(t * 10) % 2 === 0) {
+          for (let i = -3; i <= 3; i++) {
+            spawnBossBullet(this.x, this.y, this.angle + i * 0.15, 220 + t * 40, 1, '#ff4400');
+          }
+        }
+      }
+      if (a === 'tail_swipe' && t > 0.3 && t < 0.8) {
+        const dx = player.x - this.x, dy = player.y - this.y;
+        if (Math.sqrt(dx*dx + dy*dy) < 60) player.takeDamage(2);
+      }
+      if (a === 'dive') {
+        if (t < 0.8) { this.y -= 300 * dt; }
+        else if (t < 1.5) {
+          this.y += 600 * dt;
+          if (t > 1.2 && Math.sqrt((player.x - this.x)**2 + (player.y - this.y)**2) < 80)
+            player.takeDamage(2);
+        }
+      }
+      if (a === 'summon' && t > 0.5 && !this.attackState.summoned) {
+        this.attackState.summoned = true;
+        for (let i = 0; i < 4; i++) {
+          enemies.push(createEnemy('slime',
+            this.x + (Math.random() - 0.5) * 100,
+            this.y + (Math.random() - 0.5) * 100));
+        }
+      }
+      if (a === 'teleport' && t > 0.8 && !this.attackState.teleported) {
+        this.attackState.teleported = true;
+        this.x = player.x + (Math.random() - 0.5) * 200;
+        this.y = player.y + (Math.random() - 0.5) * 200;
+      }
+      if (a === 'ground_pound' && t > 1 && t < 1.3) {
+        camera.shake(8);
+        if (Math.sqrt((player.x - this.x)**2 + (player.y - this.y)**2) < 100)
+          player.takeDamage(1);
+      }
+      if (a === 'spawn_spiders' && t > 0.6 && !this.attackState.spawned) {
+        this.attackState.spawned = true;
+        for (let i = 0; i < 6; i++) {
+          enemies.push(createEnemy('bat',
+            this.x + (Math.random() - 0.5) * 120,
+            this.y + (Math.random() - 0.5) * 120));
+        }
+      }
+      // === Shadow Lord attacks ===
+      if (a === 'clone' && t > 0.5 && !this.attackState.cloned) {
+        this.attackState.cloned = true;
+        for (let i = 0; i < 3; i++) {
+          bossClones.push({
+            x: this.x + (Math.random() - 0.5) * 200,
+            y: this.y + (Math.random() - 0.5) * 200,
+            life: 5, color: this.color, alpha: 0.5, radius: this.radius * 0.8
+          });
+        }
+      }
+      if (a === 'cross_laser' && t < 3) {
+        this.attackState.laserRot = (this.attackState.laserRot || 0) + 1.5 * dt;
+        const a0 = this.attackState.laserRot;
+        for (let i = 0; i < 4; i++) {
+          const la = a0 + i * Math.PI / 2;
+          const pdx = player.x - this.x, pdy = player.y - this.y;
+          const proj = Math.abs(-Math.sin(la) * pdx + Math.cos(la) * pdy);
+          if (proj < 15 && Math.sqrt(pdx*pdx + pdy*pdy) < 400)
+            player.takeDamage(1);
+        }
+      }
+      if (a === 'fire_aura') {
+        if (Math.sqrt((player.x - this.x)**2 + (player.y - this.y)**2) < 70)
+          player.takeDamage(0.5);
+      }
+      // === Spider Queen attacks ===
+      if (a === 'web' && t > 0.3 && !this.attackState.webDone) {
+        this.attackState.webDone = true;
+        spawnBossBullet(this.x, this.y, this.angle, 300, 0, '#cccccc');
+      }
+      // === Vine Behemoth attacks ===
+      if (a === 'tentacle' && t < 2) {
+        const tentIdx = Math.floor(t * 6);
+        if (tentIdx % 3 === 0 && !this.attackState['tent' + tentIdx]) {
+          this.attackState['tent' + tentIdx] = true;
+          const tx = this.x + (Math.random() - 0.5) * 250;
+          const ty = this.y + (Math.random() - 0.5) * 200;
+          tentacleZones.push({ x: tx, y: ty, timer: 1.0, radius: 20 });
+          if (Math.sqrt((player.x - tx)**2 + (player.y - ty)**2) < 30)
+            player.takeDamage(1);
+        }
+      }
+      if (a === 'spore_cloud' && t < 3) {
+        if (Math.floor(t * 3) !== this.attackState.lastSpore) {
+          this.attackState.lastSpore = Math.floor(t * 3);
+          sporeZones.push({
+            x: player.x + (Math.random() - 0.5) * 80,
+            y: player.y + (Math.random() - 0.5) * 80,
+            life: 4, radius: 35
+          });
+        }
+      }
+      if (a === 'thorn_ring' && t < 2) {
+        const ringR = 80 + t * 120;
+        const thornCount = 24;
+        for (let i = 0; i < thornCount; i++) {
+          const ta = (i / thornCount) * Math.PI * 2 + t;
+          const tx = this.x + Math.cos(ta) * ringR;
+          const ty = this.y + Math.sin(ta) * ringR;
+          if (Math.sqrt((player.x - tx)**2 + (player.y - ty)**2) < 16)
+            player.takeDamage(1);
+        }
+      }
+      // === Thousand Eye attacks ===
+      if (a === 'spin_lasers' && t < 3) {
+        this.attackState.spinAngle = (this.attackState.spinAngle || 0) + 3 * dt;
+        for (let i = 0; i < 8; i++) {
+          const la = this.attackState.spinAngle + i * Math.PI / 4;
+          if (Math.floor(t * 10) % 2 === 0)
+            spawnBossBullet(this.x, this.y, la, 180, 1, '#ff4488');
+        }
+      }
+      if (a === 'flash_blind' && t > 0.5 && !this.attackState.blinded) {
+        this.attackState.blinded = true;
+        flashScreen(0.4);
+      }
+      if (a === 'eye_minions' && t > 0.3 && !this.attackState.minionsSpawned) {
+        this.attackState.minionsSpawned = true;
+        for (let i = 0; i < 6; i++) {
+          enemies.push(createEnemy('bat',
+            this.x + (Math.random() - 0.5) * 120,
+            this.y + (Math.random() - 0.5) * 120));
+        }
+      }
+      // === Thunder Lord attacks ===
+      if (a === 'flash_strike' && t > 0.4 && !this.attackState.struck) {
+        this.attackState.struck = true;
+        this.x = player.x;
+        this.y = player.y;
+        camera.shake(10);
+        // Check old position to avoid always hitting (boss is now at player pos)
+        if (Math.sqrt((player.x - this.x)**2 + (player.y - this.y)**2) < 50)
+          player.takeDamage(2);
+      }
+      if (a === 'lightning_pillar' && t < 3) {
+        if (Math.floor(t * 4) !== this.attackState.lastPillar) {
+          this.attackState.lastPillar = Math.floor(t * 4);
+          const px = player.x + (Math.random() - 0.5) * 150;
+          const py = player.y + (Math.random() - 0.5) * 150;
+          lightningPillars.push({ x: px, y: py, life: 2.0, radius: 25 });
+        }
+      }
+      if (a === 'dash_combo' && t < 3) {
+        if (Math.floor(t * 2) !== this.attackState.lastDash) {
+          this.attackState.lastDash = Math.floor(t * 2);
+          this.attackState.dashAngle = this.angle;
+          this.attackState.dashTimer = 0;
+        }
+        this.x += Math.cos(this.attackState.dashAngle || this.angle) * 450 * dt;
+        this.y += Math.sin(this.attackState.dashAngle || this.angle) * 450 * dt;
+        if (Math.sqrt((player.x - this.x)**2 + (player.y - this.y)**2) < 30)
+          player.takeDamage(2);
+      }
+      // === Ancient Golem attacks ===
+      if (a === 'rock_throw' && t < 3) {
+        if (Math.floor(t * 3) % 2 === 0)
+          spawnBossBullet(this.x, this.y, this.angle, 300, 2, '#888888', true);
+      }
+      if (a === 'rock_throw_fast' && t < 2) {
+        if (Math.floor(t * 5) % 2 === 0)
+          spawnBossBullet(this.x, this.y, this.angle, 350, 2, '#888888', true);
+      }
+      if (a === 'ground_slam' && t > 0.8 && t < 1.5) {
+        for (let i = 0; i < 5; i++) {
+          const sw = this.x + (i - 2) * 60;
+          if (Math.abs(player.y - this.y) < 30 && Math.abs(player.x - sw) < 30)
+            player.takeDamage(2);
+        }
+        camera.shake(6);
+      }
+      if (a === 'stone_wall' && t > 0.5 && !this.attackState.wallSpawned) {
+        this.attackState.wallSpawned = true;
+        for (let i = -1; i <= 1; i += 2) {
+          stoneWalls.push({
+            x: player.x + i * 80, y: player.y,
+            life: 4, w: 20, h: 80
+          });
+        }
+      }
+      // === Shadow Twins attacks ===
+      if (a === 'twin_slash') {
+        if (t < 0.3) {
+          // Wind-up — dash toward player
+          this.x += Math.cos(this.angle) * 500 * dt;
+          this.y += Math.sin(this.angle) * 500 * dt;
+        } else if (t < 0.6) {
+          // Slash arc
+          if (!this.attackState.slashed) {
+            this.attackState.slashed = true;
+            if (Math.sqrt((player.x - this.x)**2 + (player.y - this.y)**2) < 50)
+              player.takeDamage(2);
+          }
+        }
+      }
+      if (a === 'twin_bolts' && t < 2) {
+        if (Math.floor(t * 4) % 2 === 0) {
+          for (let i = -1; i <= 1; i++) {
+            spawnBossBullet(this.x, this.y, this.angle + i * 0.15, 250, 1, '#9966cc');
+          }
+        }
+      }
+      if (a === 'twin_bolts_enraged' && t < 2) {
+        if (Math.floor(t * 5) % 2 === 0) {
+          for (let i = -2; i <= 2; i++) {
+            spawnBossBullet(this.x, this.y, this.angle + i * 0.2, 300, 1, '#bb44ff');
+          }
+        }
+      }
+      // === Magma Dragon phase 2: fire_tracking ===
+      if (a === 'fire_tracking' && t < 2) {
+        if (Math.floor(t * 4) !== this.attackState.lastTrack) {
+          this.attackState.lastTrack = Math.floor(t * 4);
+          const ta = Math.atan2(player.y - this.y, player.x - this.x);
+          spawnBossBullet(this.x, this.y, ta, 200, 1, '#ff8800', false, true);
+        }
+      }
+    },
+
+    takeDamage(amount) {
+      this.hp -= amount;
+      this.flashTimer = 0.08;
+      if (this.hp <= 0) { this.alive = false; }
+    },
+
+    render(ctx) {
+      const col = this.flashTimer > 0 ? '#ffffff' : this.color;
+      // Boss body
+      ctx.fillStyle = col;
+      ctx.fillRect(this.x - this.radius, this.y - this.radius, this.radius * 2, this.radius * 2);
+      // Boss eyes
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(this.x - 6, this.y - this.radius + 6, 5, 5);
+      ctx.fillRect(this.x + 3, this.y - this.radius + 6, 5, 5);
+      // Glow aura
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.3 + Math.sin(Date.now() / 200) * 0.15;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.radius + 8, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      // Cross laser rendering (shadow_lord)
+      if (this.currentAttack === 'cross_laser' && this.attackState.laserRot != null) {
+        ctx.save();
+        ctx.globalAlpha = 0.6;
+        ctx.strokeStyle = '#ff0044';
+        ctx.lineWidth = 3;
+        const a0 = this.attackState.laserRot;
+        for (let i = 0; i < 4; i++) {
+          const la = a0 + i * Math.PI / 2;
+          ctx.beginPath();
+          ctx.moveTo(this.x, this.y);
+          ctx.lineTo(this.x + Math.cos(la) * 400, this.y + Math.sin(la) * 400);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+    }
+  };
+  bossBullets = [];
+  bossClones = [];
+  tentacleZones = [];
+  sporeZones = [];
+  lightningPillars = [];
+  stoneWalls = [];
+  gameState = STATE.BOSS;
+}
+
+function onBossDefeated() {
+  const room = getCurrentRoom();
+  room.cleared = true;
+  const defeatedBossType = boss.type;
+  const isFinalBoss = (defeatedBossType === 'shadow_lord');
+
+  // Drop buff based on floor (non-final bosses only)
+  if (!isFinalBoss) {
+    const floorIdx = dungeon.floorNum - 1;
+    const floorBuffs = BOSS_BUFFS[floorIdx] || [];
+    if (floorBuffs.length > 0) {
+      const buff = floorBuffs[randInt(0, floorBuffs.length - 1)];
+      buff.apply();
+      showMessage('获得 Buff: ' + buff.name, 3000);
+    }
+  }
+  // Drop weapon
+  if (room) spawnRandomWeapon(room.cx, room.cy);
+  // Drop health
+  if (room) spawnDrop(room.cx - 30, room.cy, 'heart');
+
+  // Clean up boss state
+  boss = null;
+  bossBullets = [];
+  bossClones = [];
+  tentacleZones = [];
+  sporeZones = [];
+  lightningPillars = [];
+  stoneWalls = [];
+
+  if (isFinalBoss) {
+    gameState = STATE.VICTORY;
+    saveHighScore();
+    SFX.bossExplosion();
+  } else {
+    gameState = STATE.PLAYING;
+  }
+}
 
 // === MAP GENERATION FUNCTIONS ===
 function getRoom(id) { return dungeon?.rooms[id]; }
@@ -605,9 +1073,15 @@ function enterRoom(roomId) {
   // Spawn player at center
   player.x = room.cx;
   player.y = room.cy;
-  // If combat/boss room and not cleared, spawn enemies
-  if ((room.type === ROOM_TYPE.COMBAT || room.type === ROOM_TYPE.BOSS) && !room.cleared) {
+  // If combat room and not cleared, spawn enemies
+  if (room.type === ROOM_TYPE.COMBAT && !room.cleared) {
     spawnRoomEnemies(room);
+  }
+  // Boss room — start boss fight
+  if (room.type === ROOM_TYPE.BOSS && !room.cleared) {
+    const floorBosses = Object.keys(BOSS_DATA).filter(k => BOSS_DATA[k].floor === dungeon.floorNum);
+    const bossType = floorBosses[randInt(0, floorBosses.length - 1)];
+    startBossFight(bossType);
   }
 }
 
@@ -725,14 +1199,56 @@ function renderEnemyBullets(ctx) {
 }
 
 // === LOOT DROP ===
-function spawnDrop(x, y) {
-  const dropType = Math.random() < 0.5 ? 'coins' : 'heart';
+function spawnDrop(x, y, dropTypeOverride) {
+  const dropType = dropTypeOverride || (Math.random() < 0.5 ? 'coins' : 'heart');
   if (dropType === 'coins') {
     player.coins += randInt(3, 8);
   } else {
     player.hp = Math.min(player.maxHp, player.hp + 1);
   }
 }
+
+// === HELPER: Random weapon drop ===
+function spawnRandomWeapon(x, y) {
+  const weaponTypes = Object.keys(WEAPONS).filter(t => t !== 'pistol');
+  if (weaponTypes.length === 0) return;
+  const type = weaponTypes[randInt(0, weaponTypes.length - 1)];
+  const affixKeys = Object.keys(AFFIXES);
+  const affix = Math.random() < 0.4 ? affixKeys[randInt(0, affixKeys.length - 1)] : null;
+  const weaponObj = { type, affix };
+  if (player.weapons.length < 2) {
+    player.weapons.push(weaponObj);
+  } else {
+    player.weapons[player.currentWeapon] = weaponObj;
+  }
+  const label = WEAPONS[type].emoji + ' ' + WEAPONS[type].name + (affix ? ' [' + AFFIXES[affix].name + ']' : '');
+  showMessage('获得武器: ' + label, 3000);
+}
+
+// === HELPER: UI message queue ===
+function showMessage(text, duration) {
+  messageQueue.push({ text, timer: duration / 1000 });
+}
+
+// === HELPER: Screen flash overlay ===
+function flashScreen(duration) {
+  flashAlpha = Math.max(flashAlpha, duration);
+}
+
+// === HELPER: Save high score ===
+function saveHighScore() {
+  try {
+    const scores = JSON.parse(localStorage.getItem('pixelKnightScores') || '[]');
+    scores.push({ score: player.coins, date: new Date().toISOString() });
+    scores.sort((a, b) => b.score - a.score);
+    localStorage.setItem('pixelKnightScores', JSON.stringify(scores.slice(0, 10)));
+  } catch(e) {}
+}
+
+// === HELPER: SFX stubs ===
+const SFX = {
+  bossExplosion() { /* placeholder for sound effect */ }
+};
 
 // === BULLET UPDATE / RENDER ===
 function updateBullets(dt) {
@@ -762,6 +1278,236 @@ function renderBullets(ctx) {
   }
 }
 
+// === BOSS BULLETS UPDATE / RENDER ===
+function updateBossBullets(dt) {
+  for (let i = bossBullets.length - 1; i >= 0; i--) {
+    const bb = bossBullets[i];
+    if (bb.parabolic) { bb.vy += 300 * dt; }
+    if (bb.tracking) {
+      const dx = player.x - bb.x, dy = player.y - bb.y;
+      const tAngle = Math.atan2(dy, dx);
+      const lerpFactor = 3 * dt;
+      bb.vx += Math.cos(tAngle) * (bb.baseSpeed || 200) * lerpFactor;
+      bb.vy += Math.sin(tAngle) * (bb.baseSpeed || 200) * lerpFactor;
+      const spd = Math.sqrt(bb.vx*bb.vx + bb.vy*bb.vy);
+      const maxSpd = (bb.baseSpeed || 200) * 1.5;
+      if (spd > maxSpd) { bb.vx = (bb.vx / spd) * maxSpd; bb.vy = (bb.vy / spd) * maxSpd; }
+    }
+    bb.x += bb.vx * dt;
+    bb.y += bb.vy * dt;
+    bb.life -= dt;
+    // Check stone wall collision for boss bullets
+    let hitWall = false;
+    for (const sw of stoneWalls) {
+      if (bb.x > sw.x - sw.w/2 && bb.x < sw.x + sw.w/2 &&
+          bb.y > sw.y - sw.h/2 && bb.y < sw.y + sw.h/2) {
+        hitWall = true; break;
+      }
+    }
+    if (bb.life <= 0 || hitWall ||
+        bb.x < roomBounds.x - 100 || bb.x > roomBounds.x + roomBounds.w + 100 ||
+        bb.y < roomBounds.y - 100 || bb.y > roomBounds.y + roomBounds.h + 100) {
+      bossBullets.splice(i, 1);
+    }
+  }
+}
+
+function renderBossBullets(ctx) {
+  for (const bb of bossBullets) {
+    ctx.fillStyle = bb.color || '#ff4444';
+    ctx.beginPath();
+    ctx.arc(bb.x, bb.y, 4, 0, Math.PI * 2);
+    ctx.fill();
+    // Glow
+    if (bb.color) {
+      ctx.fillStyle = bb.color.replace('ff', '66');
+      ctx.beginPath();
+      ctx.arc(bb.x, bb.y, 8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+// === BOSS CLONES UPDATE / RENDER (shadow_lord) ===
+function updateBossClones(dt) {
+  for (const clone of bossClones) {
+    clone.life -= dt * 0.5;
+  }
+  bossClones = bossClones.filter(c => c.life > 0);
+}
+
+function renderBossClones(ctx) {
+  for (const clone of bossClones) {
+    ctx.save();
+    ctx.globalAlpha = clone.alpha;
+    ctx.fillStyle = clone.color;
+    ctx.fillRect(clone.x - clone.radius, clone.y - clone.radius, clone.radius * 2, clone.radius * 2);
+    ctx.restore();
+  }
+}
+
+// === TENTACLE ZONES UPDATE / RENDER (vine_behemoth) ===
+function updateTentacleZones(dt) {
+  for (let i = tentacleZones.length - 1; i >= 0; i--) {
+    const tz = tentacleZones[i];
+    tz.timer -= dt;
+    if (tz.timer <= 0) { tentacleZones.splice(i, 1); continue; }
+    // Check player collision
+    const dx = player.x - tz.x, dy = player.y - tz.y;
+    if (Math.sqrt(dx*dx + dy*dy) < tz.radius + player.radius)
+      player.takeDamage(1);
+  }
+}
+
+function renderTentacleZones(ctx) {
+  for (const tz of tentacleZones) {
+    ctx.save();
+    ctx.globalAlpha = tz.timer;
+    ctx.fillStyle = '#44aa44';
+    ctx.beginPath();
+    ctx.arc(tz.x, tz.y, tz.radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#88cc88';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// === SPORE ZONES UPDATE / RENDER (vine_behemoth) ===
+function updateSporeZones(dt) {
+  for (let i = sporeZones.length - 1; i >= 0; i--) {
+    const sz = sporeZones[i];
+    sz.life -= dt;
+    if (sz.life <= 0) { sporeZones.splice(i, 1); continue; }
+    const dx = player.x - sz.x, dy = player.y - sz.y;
+    if (Math.sqrt(dx*dx + dy*dy) < sz.radius + player.radius)
+      player.takeDamage(1);
+  }
+}
+
+function renderSporeZones(ctx) {
+  for (const sz of sporeZones) {
+    ctx.save();
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = '#66cc66';
+    ctx.beginPath();
+    ctx.arc(sz.x, sz.y, sz.radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+// === LIGHTNING PILLARS UPDATE / RENDER (thunder_lord) ===
+function updateLightningPillars(dt) {
+  for (let i = lightningPillars.length - 1; i >= 0; i--) {
+    const lp = lightningPillars[i];
+    lp.life -= dt;
+    if (lp.life <= 0) { lightningPillars.splice(i, 1); continue; }
+    const dx = player.x - lp.x, dy = player.y - lp.y;
+    if (Math.sqrt(dx*dx + dy*dy) < lp.radius + player.radius)
+      player.takeDamage(1);
+  }
+}
+
+function renderLightningPillars(ctx) {
+  for (const lp of lightningPillars) {
+    ctx.save();
+    ctx.globalAlpha = lp.life / 2.0;
+    ctx.strokeStyle = '#ffdd00';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(lp.x, lp.y - 60);
+    ctx.lineTo(lp.x, lp.y + 40);
+    ctx.stroke();
+    // Branches
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(lp.x, lp.y - 20);
+    ctx.lineTo(lp.x - 12, lp.y);
+    ctx.moveTo(lp.x, lp.y);
+    ctx.lineTo(lp.x + 10, lp.y + 15);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// === STONE WALLS UPDATE / RENDER (ancient_golem) ===
+function updateStoneWalls(dt) {
+  for (let i = stoneWalls.length - 1; i >= 0; i--) {
+    const sw = stoneWalls[i];
+    sw.life -= dt * 0.5;
+    if (sw.life <= 0) { stoneWalls.splice(i, 1); continue; }
+    // Block player bullets hitting walls
+    for (let bi = bullets.length - 1; bi >= 0; bi--) {
+      const b = bullets[bi];
+      if (b.x > sw.x - sw.w/2 && b.x < sw.x + sw.w/2 &&
+          b.y > sw.y - sw.h/2 && b.y < sw.y + sw.h/2) {
+        bullets.splice(bi, 1);
+      }
+    }
+  }
+}
+
+function renderStoneWalls(ctx) {
+  for (const sw of stoneWalls) {
+    ctx.save();
+    ctx.globalAlpha = sw.life / 4;
+    ctx.fillStyle = '#666655';
+    ctx.fillRect(sw.x - sw.w/2, sw.y - sw.h/2, sw.w, sw.h);
+    ctx.strokeStyle = '#888877';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(sw.x - sw.w/2, sw.y - sw.h/2, sw.w, sw.h);
+    ctx.restore();
+  }
+}
+
+// === BOSS COLLISION ===
+function checkBulletBossCollision() {
+  if (!boss || !boss.alive) return;
+  for (let bi = bullets.length - 1; bi >= 0; bi--) {
+    const b = bullets[bi];
+    const dx = b.x - boss.x, dy = b.y - boss.y;
+    if (Math.sqrt(dx*dx + dy*dy) < boss.radius + 6) {
+      boss.takeDamage(b.damage);
+      bullets.splice(bi, 1);
+    }
+  }
+}
+
+function checkBossBulletPlayerCollision() {
+  if (player.invincible > 0) return;
+  for (let i = bossBullets.length - 1; i >= 0; i--) {
+    const bb = bossBullets[i];
+    const dx = player.x - bb.x, dy = player.y - bb.y;
+    if (Math.sqrt(dx*dx + dy*dy) < player.radius + 5) {
+      // Web bullet applies slow
+      if (bb.color === '#cccccc') { slowTimer = 2.0; }
+      player.takeDamage(bb.damage);
+      bossBullets.splice(i, 1);
+    }
+  }
+}
+
+function checkBossPlayerCollision() {
+  if (!boss || !boss.alive) return;
+  if (player.invincible > 0) return;
+  const dx = player.x - boss.x, dy = player.y - boss.y;
+  if (Math.sqrt(dx*dx + dy*dy) < player.radius + boss.radius) {
+    player.takeDamage(1);
+  }
+}
+
+function checkBossClonesPlayerCollision() {
+  for (let i = bossClones.length - 1; i >= 0; i--) {
+    const c = bossClones[i];
+    const dx = player.x - c.x, dy = player.y - c.y;
+    if (Math.sqrt(dx*dx + dy*dy) < player.radius + c.radius) {
+      player.takeDamage(1);
+    }
+  }
+}
+
 // === GAME LOOP ===
 let lastTime = 0;
 function gameLoop(timestamp) {
@@ -775,11 +1521,42 @@ function gameLoop(timestamp) {
 }
 // Main update/render — player + camera driving the game loop
 function update(dt) {
-  // Weapon switch keys
-  if (keys['Digit1']) { keys['Digit1'] = false; switchWeapon(0); }
-  if (keys['Digit2']) { keys['Digit2'] = false; switchWeapon(1); }
+  // UI overlay updates
+  flashAlpha = Math.max(0, flashAlpha - dt);
+  slowTimer = Math.max(0, slowTimer - dt);
+
+  // Update message queue
+  for (let i = messageQueue.length - 1; i >= 0; i--) {
+    messageQueue[i].timer -= dt;
+    if (messageQueue[i].timer <= 0) messageQueue.splice(i, 1);
+  }
+
+  // Weapon switch keys (only when playing)
+  if (gameState === STATE.PLAYING || gameState === STATE.BOSS) {
+    if (keys['Digit1']) { keys['Digit1'] = false; switchWeapon(0); }
+    if (keys['Digit2']) { keys['Digit2'] = false; switchWeapon(1); }
+  }
+
   player.update(dt);
   updateBullets(dt);
+
+  // Boss update
+  if (boss && boss.alive && gameState === STATE.BOSS) {
+    boss.update(dt);
+    updateBossBullets(dt);
+    updateBossClones(dt);
+    updateTentacleZones(dt);
+    updateSporeZones(dt);
+    updateLightningPillars(dt);
+    updateStoneWalls(dt);
+    checkBulletBossCollision();
+    checkBossBulletPlayerCollision();
+    checkBossPlayerCollision();
+    checkBossClonesPlayerCollision();
+    // Check boss defeat
+    if (!boss.alive) { onBossDefeated(); }
+  }
+
   // Enemy update
   enemies.forEach(e => e.update(dt));
   enemies = enemies.filter(e => e.alive);
@@ -788,11 +1565,23 @@ function update(dt) {
   checkBulletEnemyCollisions();
   checkEnemyPlayerCollision(dt);
   checkEnemyBulletPlayerCollision();
-  // Room cleared check
+  // Room cleared check (combat rooms only; boss handled by onBossDefeated)
   const room = getCurrentRoom();
-  if (room && (room.type === ROOM_TYPE.COMBAT || room.type === ROOM_TYPE.BOSS) && !room.cleared && enemies.filter(e => e.alive).length === 0) {
+  if (room && room.type === ROOM_TYPE.COMBAT && !room.cleared && enemies.filter(e => e.alive).length === 0) {
     room.cleared = true;
     if (Math.random() < 0.4) spawnDrop(room.cx, room.cy);
+  }
+
+  // Game over check
+  if (player.hp <= 0 && gameState !== STATE.GAMEOVER && gameState !== STATE.VICTORY) {
+    gameState = STATE.GAMEOVER;
+    boss = null;
+    bossBullets = [];
+    bossClones = [];
+    tentacleZones = [];
+    sporeZones = [];
+    lightningPillars = [];
+    stoneWalls = [];
   }
   camera.update(dt);
 }
@@ -809,8 +1598,38 @@ function render() {
   renderEnemyBullets(ctx);
   player.render(ctx);
   renderBullets(ctx);
+
+  // Boss rendering
+  if (boss && boss.alive && gameState === STATE.BOSS) {
+    renderBossBullets(ctx);
+    renderTentacleZones(ctx);
+    renderSporeZones(ctx);
+    renderLightningPillars(ctx);
+    renderStoneWalls(ctx);
+    renderBossClones(ctx);
+    boss.render(ctx);
+  }
+
   camera.restore(ctx);
-  // HUD (screen-space)
+
+  // === HUD (screen-space) ===
+  // Boss HP bar (top-center)
+  if (boss && boss.alive && gameState === STATE.BOSS) {
+    const barW = 300, barH = 16, barX = GW/2 - barW/2, barY = 12;
+    ctx.fillStyle = '#333333';
+    ctx.fillRect(barX, barY, barW, barH);
+    const hpRatio = boss.hp / boss.maxHp;
+    ctx.fillStyle = hpRatio > 0.3 ? '#ff4444' : '#ff0000';
+    ctx.fillRect(barX, barY, barW * hpRatio, barH);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(barX, barY, barW, barH);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(boss.name + ' ' + Math.ceil(boss.hp) + '/' + boss.maxHp, GW/2, barY + 13);
+  }
+
   // HP
   ctx.fillStyle = '#ff4444';
   ctx.font = '14px monospace';
@@ -824,6 +1643,12 @@ function render() {
     ctx.fillStyle = '#aaaacc';
     ctx.fillText('楼层: ' + dungeon.floorNum, 16, 66);
   }
+  // Skill cooldown
+  if (player.skillTimer > 0) {
+    ctx.fillStyle = '#ffaa00';
+    ctx.fillText('技能: ' + player.skillTimer.toFixed(1) + 's', 16, 88);
+  }
+
   // Weapon info
   const cwp = player.getWeapon();
   if (cwp) {
@@ -832,6 +1657,58 @@ function render() {
     ctx.textAlign = 'left';
     ctx.fillText('武器: ' + wd.emoji + ' ' + wd.name + (cwp.affix ? ' [' + AFFIXES[cwp.affix].emoji + ']' : ''), 16, GH - 16);
     ctx.fillText('按 1/2 切换武器', 16, GH - 36);
+  }
+
+  // === UI OVERLAYS ===
+  // Screen flash (white overlay)
+  if (flashAlpha > 0) {
+    ctx.fillStyle = 'rgba(255,255,255,' + Math.min(flashAlpha, 0.8) + ')';
+    ctx.fillRect(0, 0, GW, GH);
+  }
+
+  // Message queue (center screen)
+  if (messageQueue.length > 0) {
+    const msg = messageQueue[0];
+    ctx.fillStyle = '#ffcc00';
+    ctx.font = '18px monospace';
+    ctx.textAlign = 'center';
+    const msgAlpha = Math.min(msg.timer, 0.5) / 0.5;
+    ctx.globalAlpha = msgAlpha;
+    ctx.fillText(msg.text, GW/2, GH/2 - 30);
+    ctx.globalAlpha = 1;
+  }
+
+  // Slow effect indicator
+  if (slowTimer > 0) {
+    ctx.fillStyle = 'rgba(136,204,255,0.15)';
+    ctx.fillRect(0, 0, GW, GH);
+  }
+
+  // Game Over overlay
+  if (gameState === STATE.GAMEOVER) {
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.fillRect(0, 0, GW, GH);
+    ctx.fillStyle = '#ff4444';
+    ctx.font = '36px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('你输了 / GAME OVER', GW/2, GH/2 - 20);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '16px monospace';
+    ctx.fillText('刷新页面重新开始 / Refresh to restart', GW/2, GH/2 + 20);
+  }
+
+  // Victory overlay
+  if (gameState === STATE.VICTORY) {
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.fillRect(0, 0, GW, GH);
+    ctx.fillStyle = '#ffcc00';
+    ctx.font = '36px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('胜利！/ VICTORY!', GW/2, GH/2 - 30);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '16px monospace';
+    ctx.fillText('得分 / Score: ' + player.coins + ' 💰', GW/2, GH/2 + 10);
+    ctx.fillText('刷新页面重新开始 / Refresh to restart', GW/2, GH/2 + 40);
   }
 }
 
