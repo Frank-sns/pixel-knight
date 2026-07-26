@@ -17,6 +17,15 @@
 const GW = 960, GH = 640; // game resolution
 const TILE = 32;          // tile size for room grid
 
+// === MAP GENERATION ===
+const ROOM_TYPE = { START: 'start', COMBAT: 'combat', CHEST: 'chest', SHOP: 'shop', BOSS: 'boss' };
+const GRID_COLS = 4, GRID_ROWS = 3;
+const ROOM_W = 10 * TILE, ROOM_H = 7 * TILE; // 320x224
+const CORRIDOR_W = 3 * TILE;
+
+let dungeon = null; // { rooms[], corridors[], floorNum }
+let currentRoomIdx = -1;
+
 // === STATE MACHINE ===
 const STATE = { MENU: 'menu', CHAR_SELECT: 'charSelect', PLAYING: 'playing', BOSS: 'boss', SHOP: 'shop', GAMEOVER: 'gameover', VICTORY: 'victory', PAUSED: 'paused' };
 let gameState = STATE.MENU;
@@ -231,6 +240,8 @@ const player = {
     // Camera follow
     camera.targetX = this.x;
     camera.targetY = this.y;
+    // Door collision check
+    checkDoorCollision();
   },
 
   takeDamage(amount) {
@@ -283,8 +294,208 @@ function switchWeapon(slot) {
   }
 }
 
-// Room bounds placeholder — updated when entering a room
+// Room bounds — updated when entering a room
 let roomBounds = { x: -200, y: -150, w: 400, h: 300 };
+
+// === MAP GENERATION FUNCTIONS ===
+function getRoom(id) { return dungeon?.rooms[id]; }
+function getCurrentRoom() { return getRoom(currentRoomIdx); }
+
+function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+
+function createRoom(id, gx, gy, type) {
+  return {
+    id,
+    gridX: gx, gridY: gy,
+    cx: gx * (ROOM_W + CORRIDOR_W) + ROOM_W/2 + TILE,
+    cy: gy * (ROOM_H + CORRIDOR_W) + ROOM_H/2 + TILE,
+    x: gx * (ROOM_W + CORRIDOR_W) + TILE,
+    y: gy * (ROOM_H + CORRIDOR_W) + TILE,
+    w: ROOM_W, h: ROOM_H,
+    type, explored: false, cleared: false,
+    enemies: [],
+    doors: [] // {x, y, targetRoomId, direction}
+  };
+}
+
+function buildCorridors(rooms) {
+  const corridors = [];
+  const roomMap = {};
+  for (const r of rooms) roomMap[`${r.gridX},${r.gridY}`] = r;
+
+  for (const r of rooms) {
+    const dirs = [{dx:1,dy:0,dir:'right'},{dx:-1,dy:0,dir:'left'},{dx:0,dy:1,dir:'down'},{dx:0,dy:-1,dir:'up'}];
+    for (const {dx, dy, dir} of dirs) {
+      const nx = r.gridX + dx, ny = r.gridY + dy;
+      const neighbor = roomMap[`${nx},${ny}`];
+      if (neighbor && neighbor.id > r.id) { // dedupe
+        corridors.push({ from: r.id, to: neighbor.id });
+        let doorX, doorY;
+        if (dir === 'right') { doorX = r.x + r.w; doorY = r.cy; }
+        else if (dir === 'left') { doorX = r.x; doorY = r.cy; }
+        else if (dir === 'down') { doorX = r.cx; doorY = r.y + r.h; }
+        else { doorX = r.cx; doorY = r.y; }
+        r.doors.push({ x: doorX, y: doorY, targetRoomId: neighbor.id, dir });
+        const oppDir = {right:'left',left:'right',up:'down',down:'up'}[dir];
+        neighbor.doors.push({ x: doorX, y: doorY, targetRoomId: r.id, dir: oppDir });
+      }
+    }
+  }
+  return corridors;
+}
+
+function generateFloor(floorNum) {
+  const rooms = [];
+  // Step 1: Place start room (leftmost column, random row)
+  const startRow = randInt(0, GRID_ROWS - 1);
+  const startRoom = {
+    id: 0,
+    gridX: 0, gridY: startRow,
+    cx: ROOM_W/2 + TILE, cy: startRow * (ROOM_H + CORRIDOR_W) + ROOM_H/2 + TILE,
+    x: TILE, y: startRow * (ROOM_H + CORRIDOR_W) + TILE,
+    w: ROOM_W, h: ROOM_H,
+    type: ROOM_TYPE.START, explored: true, cleared: true,
+    enemies: [], doors: []
+  };
+  rooms.push(startRoom);
+
+  // Step 2: BFS-style path generation across the grid — boss at rightmost column
+  const bossRow = randInt(0, GRID_ROWS - 1);
+  const bossRoom = {
+    id: 0, // will reassign
+    gridX: GRID_COLS - 1, gridY: bossRow,
+    cx: (GRID_COLS-1) * (ROOM_W + CORRIDOR_W) + ROOM_W/2 + TILE,
+    cy: bossRow * (ROOM_H + CORRIDOR_W) + ROOM_H/2 + TILE,
+    x: (GRID_COLS-1) * (ROOM_W + CORRIDOR_W) + TILE,
+    y: bossRow * (ROOM_H + CORRIDOR_W) + TILE,
+    w: ROOM_W, h: ROOM_H,
+    type: ROOM_TYPE.BOSS, explored: false, cleared: false,
+    enemies: [], doors: []
+  };
+
+  // Step 3: Generate main path from start to boss (random walk)
+  let path = [{x: 0, y: startRow}];
+  let cx = 0, cy = startRow;
+  while (cx < GRID_COLS - 1 || cy !== bossRow) {
+    if (cx < GRID_COLS - 1 && (Math.random() < 0.7 || cy === bossRow)) {
+      cx++;
+    } else if (cy < bossRow) {
+      cy++;
+    } else if (cy > bossRow) {
+      cy--;
+    }
+    path.push({x: cx, y: cy});
+  }
+
+  // Step 4: Add branch rooms
+  const usedCells = new Set(path.map(p => `${p.x},${p.y}`));
+  const branchCells = [];
+  for (let gx = 0; gx < GRID_COLS; gx++) {
+    for (let gy = 0; gy < GRID_ROWS; gy++) {
+      if (!usedCells.has(`${gx},${gy}`) && Math.random() < 0.35) {
+        branchCells.push({x: gx, y: gy});
+        usedCells.add(`${gx},${gy}`);
+      }
+    }
+  }
+
+  // Step 5: Create all rooms
+  let nextId = 1;
+  // Main path rooms (skip start at index 0)
+  const pathRooms = [];
+  for (let i = 1; i < path.length; i++) {
+    const p = path[i];
+    const isBoss = (p.x === GRID_COLS - 1 && p.y === bossRow);
+    const room = createRoom(nextId++, p.x, p.y, isBoss ? ROOM_TYPE.BOSS : ROOM_TYPE.COMBAT);
+    if (isBoss) Object.assign(room, { x: bossRoom.x, y: bossRoom.y, cx: bossRoom.cx, cy: bossRoom.cy });
+    pathRooms.push(room);
+  }
+
+  // Branch rooms
+  const branchRooms = [];
+  const branchTypes = [ROOM_TYPE.CHEST, ROOM_TYPE.SHOP, ROOM_TYPE.COMBAT, ROOM_TYPE.COMBAT];
+  for (let i = 0; i < branchCells.length; i++) {
+    const bc = branchCells[i];
+    const rType = branchTypes[i % branchTypes.length];
+    branchRooms.push(createRoom(nextId++, bc.x, bc.y, rType));
+  }
+
+  // Merge all rooms
+  rooms.push(...pathRooms, ...branchRooms);
+  // If boss wasn't in path (should be), add it
+  if (!rooms.find(r => r.type === ROOM_TYPE.BOSS)) {
+    bossRoom.id = nextId++;
+    rooms.push(bossRoom);
+  }
+
+  // Step 6: Build connections (corridors) between adjacent rooms
+  const corridors = buildCorridors(rooms);
+
+  return { rooms, corridors, floorNum, startRoomId: 0 };
+}
+
+// === ROOM RENDERING ===
+function renderRoom(ctx, room) {
+  if (!room) return;
+  if (!room.explored) return;
+  // Floor
+  ctx.fillStyle = room.type === ROOM_TYPE.BOSS ? '#1a0a0a' : '#1a1a2e';
+  ctx.fillRect(room.x, room.y, room.w, room.h);
+  // Walls (thick borders)
+  ctx.strokeStyle = room.type === ROOM_TYPE.BOSS ? '#ff333388' : '#334466';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(room.x - 2, room.y - 2, room.w + 4, room.h + 4);
+  // Floor pattern — grid lines
+  ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+  ctx.lineWidth = 1;
+  for (let tx = room.x; tx < room.x + room.w; tx += TILE) {
+    for (let ty = room.y; ty < room.y + room.h; ty += TILE) {
+      ctx.strokeRect(tx, ty, TILE, TILE);
+    }
+  }
+  // Doorways
+  ctx.fillStyle = '#0a0a18';
+  for (const door of room.doors) {
+    ctx.fillRect(door.x - 14, door.y - 14, 28, 28);
+    ctx.strokeStyle = '#556677';
+    ctx.strokeRect(door.x - 14, door.y - 14, 28, 28);
+  }
+}
+
+// === ROOM TRANSITIONS ===
+function enterRoom(roomId) {
+  currentRoomIdx = roomId;
+  const room = getCurrentRoom();
+  if (!room) return;
+  room.explored = true;
+  roomBounds = { x: room.x + 16, y: room.y + 16, w: room.w - 32, h: room.h - 32 };
+  // Spawn player at center
+  player.x = room.cx;
+  player.y = room.cy;
+  // If combat/boss room and not cleared, spawn enemies
+  if ((room.type === ROOM_TYPE.COMBAT || room.type === ROOM_TYPE.BOSS) && !room.cleared) {
+    spawnRoomEnemies(room);
+  }
+}
+
+function spawnRoomEnemies(room) {
+  // Placeholder — enemies will be implemented in a later task
+  // For now, mark small combat rooms as cleared
+  room.cleared = true;
+}
+
+function checkDoorCollision() {
+  const room = getCurrentRoom();
+  if (!room) return;
+  for (const door of room.doors) {
+    const dx = player.x - door.x;
+    const dy = player.y - door.y;
+    if (Math.sqrt(dx*dx + dy*dy) < 20) {
+      enterRoom(door.targetRoomId);
+      return;
+    }
+  }
+}
 
 // === BULLET UPDATE / RENDER ===
 function updateBullets(dt) {
@@ -340,25 +551,8 @@ function render() {
   ctx.fillRect(0, 0, GW, GH);
   // Camera-transformed game rendering
   camera.applyTransform(ctx);
-  // Draw room bounds grid
-  ctx.strokeStyle = '#333355';
-  ctx.lineWidth = 1;
-  for (let gx = roomBounds.x; gx <= roomBounds.x + roomBounds.w; gx += 50) {
-    ctx.beginPath();
-    ctx.moveTo(gx, roomBounds.y);
-    ctx.lineTo(gx, roomBounds.y + roomBounds.h);
-    ctx.stroke();
-  }
-  for (let gy = roomBounds.y; gy <= roomBounds.y + roomBounds.h; gy += 50) {
-    ctx.beginPath();
-    ctx.moveTo(roomBounds.x, gy);
-    ctx.lineTo(roomBounds.x + roomBounds.w, gy);
-    ctx.stroke();
-  }
-  // Room border
-  ctx.strokeStyle = '#555577';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(roomBounds.x, roomBounds.y, roomBounds.w, roomBounds.h);
+  // Draw dungeon room
+  renderRoom(ctx, getCurrentRoom());
   player.render(ctx);
   renderBullets(ctx);
   camera.restore(ctx);
@@ -375,7 +569,17 @@ function render() {
   }
 }
 
-player.init('knight');
+// === GAME INIT ===
+function initGame() {
+  player.init('knight');
+  dungeon = generateFloor(1);
+  currentRoomIdx = dungeon.startRoomId;
+  gameState = STATE.PLAYING;
+  enterRoom(currentRoomIdx);
+  console.log('Dungeon generated:', dungeon);
+}
+
+initGame();
 requestAnimationFrame(gameLoop);
 console.log('Pixel Knight — player ready');
 </script>
