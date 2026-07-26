@@ -136,6 +136,7 @@ const BOSS_BUFFS = [
 let bullets = [];
 let enemies = [];
 let enemyBullets = [];
+let particles = [];
 
 // === BOSS GLOBALS ===
 let boss = null;
@@ -381,6 +382,7 @@ const player = {
     if (this.invincible > 0) return false;
     this.hp -= amount;
     SFX.damage();
+    spawnParticles(this.x, this.y, '#ff4444', 5);
     this.invincible = 0.5;
     camera.shake(6);
     return this.hp <= 0;
@@ -504,7 +506,7 @@ function createEnemy(type, x, y) {
     takeDamage(amount) {
       this.hp -= amount;
       this.flashTimer = 0.1;
-      if (this.hp <= 0) { this.alive = false; player.coins += this.coins; if (player.buffs.lifesteal > 0) { player.hp = Math.min(player.maxHp, player.hp + 0.5); } SFX.enemyDeath(); }
+      if (this.hp <= 0) { this.alive = false; player.coins += this.coins; if (player.buffs.lifesteal > 0) { player.hp = Math.min(player.maxHp, player.hp + 0.5); } spawnParticles(this.x, this.y, this.color, 8); SFX.enemyDeath(); }
     },
 
     explode() {
@@ -859,7 +861,7 @@ function startBossFight(bossType) {
     takeDamage(amount) {
       this.hp -= amount;
       this.flashTimer = 0.08;
-      if (this.hp <= 0) { this.alive = false; }
+      if (this.hp <= 0) { this.alive = false; spawnParticles(this.x, this.y, this.color, 30); }
     },
 
     render(ctx) {
@@ -942,7 +944,7 @@ function onBossDefeated() {
     gameState = STATE.VICTORY;
     saveHighScore();
   } else {
-    gameState = STATE.PLAYING;
+    advanceFloor();
   }
 }
 
@@ -1291,6 +1293,7 @@ function spawnRandomWeapon(x, y) {
 
 function pickupItem(item) {
   SFX.pickup();
+  spawnParticles(item.x, item.y, item.color || '#ffffff', 5);
   switch (item.type) {
     case 'heart':
       player.hp = Math.min(player.maxHp, player.hp + 1);
@@ -1359,18 +1362,81 @@ function flashScreen(duration) {
 }
 
 // === HELPER: Save high score ===
+function getScore() {
+  return player.coins * 10 + (player.maxHp * 50) + (dungeon ? dungeon.floorNum * 200 : 0);
+}
 function saveHighScore() {
   try {
+    const score = getScore();
     const scores = JSON.parse(localStorage.getItem('pixelKnightScores') || '[]');
-    scores.push({ score: player.coins, date: new Date().toISOString() });
+    scores.push({ score, date: new Date().toISOString() });
     scores.sort((a, b) => b.score - a.score);
     localStorage.setItem('pixelKnightScores', JSON.stringify(scores.slice(0, 10)));
     // Also update simple high score for renderMenu
     const currentHigh = parseInt(localStorage.getItem('pixel_knight_highscore') || '0');
-    if (player.coins > currentHigh) {
-      localStorage.setItem('pixel_knight_highscore', player.coins.toString());
+    if (score > currentHigh) {
+      localStorage.setItem('pixel_knight_highscore', score.toString());
     }
   } catch(e) {}
+}
+
+// === PARTICLE SYSTEM ===
+function spawnParticles(x, y, color, count) {
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 50 + Math.random() * 200;
+    particles.push({
+      x, y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 0.3 + Math.random() * 0.5,
+      maxLife: 0.3 + Math.random() * 0.5,
+      color, radius: 1 + Math.random() * 3
+    });
+  }
+}
+
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function renderParticles(ctx) {
+  for (const p of particles) {
+    const alpha = p.life / p.maxLife;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - p.radius, p.y - p.radius, p.radius*2, p.radius*2);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// === FLOOR PROGRESSION ===
+function advanceFloor() {
+  if (dungeon.floorNum >= 3) {
+    // Final boss already defeated — victory
+    gameState = STATE.VICTORY;
+    saveHighScore();
+    return;
+  }
+  // Screen flash white
+  flashScreen(0.5);
+  // Clear old enemies and bullets from previous floor
+  enemies = [];
+  bullets = [];
+  enemyBullets = [];
+  // Generate next floor
+  dungeon = generateFloor(dungeon.floorNum + 1);
+  currentRoomIdx = dungeon.startRoomId;
+  enterRoom(currentRoomIdx);
+  // Full heal
+  player.hp = player.maxHp;
+  // Keep buffs, weapons, coins
 }
 
 // === AUDIO: Web Audio API Sound Effects ===
@@ -1824,7 +1890,9 @@ function update(dt) {
     lightningPillars = [];
     stoneWalls = [];
   }
+
   camera.update(dt);
+  updateParticles(dt);
   } // end game simulation if-block
 }
 // === RENDER FUNCTIONS ===
@@ -2040,6 +2108,8 @@ function render() {
     ctx.fillText(d.emoji || '?', 0, 0);
     ctx.restore();
   }
+
+  renderParticles(ctx);
 
   camera.restore(ctx);
 
