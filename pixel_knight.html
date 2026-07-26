@@ -330,14 +330,21 @@ function buildCorridors(rooms) {
       const neighbor = roomMap[`${nx},${ny}`];
       if (neighbor && neighbor.id > r.id) { // dedupe
         corridors.push({ from: r.id, to: neighbor.id });
+        // Door from current room's perspective — at walkable boundary (16px inset from walls)
         let doorX, doorY;
-        if (dir === 'right') { doorX = r.x + r.w; doorY = r.cy; }
-        else if (dir === 'left') { doorX = r.x; doorY = r.cy; }
-        else if (dir === 'down') { doorX = r.cx; doorY = r.y + r.h; }
-        else { doorX = r.cx; doorY = r.y; }
+        if (dir === 'right')      { doorX = r.x + r.w - 16; doorY = r.cy; }
+        else if (dir === 'left')  { doorX = r.x + 16; doorY = r.cy; }
+        else if (dir === 'down')  { doorX = r.cx; doorY = r.y + r.h - 16; }
+        else                      { doorX = r.cx; doorY = r.y + 16; }
         r.doors.push({ x: doorX, y: doorY, targetRoomId: neighbor.id, dir });
+        // Door from neighbor's perspective — computed from neighbor's walls (16px inset)
         const oppDir = {right:'left',left:'right',up:'down',down:'up'}[dir];
-        neighbor.doors.push({ x: doorX, y: doorY, targetRoomId: r.id, dir: oppDir });
+        let nDoorX, nDoorY;
+        if (oppDir === 'right')      { nDoorX = neighbor.x + neighbor.w - 16; nDoorY = neighbor.cy; }
+        else if (oppDir === 'left')  { nDoorX = neighbor.x + 16; nDoorY = neighbor.cy; }
+        else if (oppDir === 'down')  { nDoorX = neighbor.cx; nDoorY = neighbor.y + neighbor.h - 16; }
+        else                         { nDoorX = neighbor.cx; nDoorY = neighbor.y + 16; }
+        neighbor.doors.push({ x: nDoorX, y: nDoorY, targetRoomId: r.id, dir: oppDir });
       }
     }
   }
@@ -348,30 +355,14 @@ function generateFloor(floorNum) {
   const rooms = [];
   // Step 1: Place start room (leftmost column, random row)
   const startRow = randInt(0, GRID_ROWS - 1);
-  const startRoom = {
-    id: 0,
-    gridX: 0, gridY: startRow,
-    cx: ROOM_W/2 + TILE, cy: startRow * (ROOM_H + CORRIDOR_W) + ROOM_H/2 + TILE,
-    x: TILE, y: startRow * (ROOM_H + CORRIDOR_W) + TILE,
-    w: ROOM_W, h: ROOM_H,
-    type: ROOM_TYPE.START, explored: true, cleared: true,
-    enemies: [], doors: []
-  };
+  const startRoom = createRoom(0, 0, startRow, ROOM_TYPE.START);
+  startRoom.explored = true;
+  startRoom.cleared = true;
   rooms.push(startRoom);
 
   // Step 2: BFS-style path generation across the grid — boss at rightmost column
   const bossRow = randInt(0, GRID_ROWS - 1);
-  const bossRoom = {
-    id: 0, // will reassign
-    gridX: GRID_COLS - 1, gridY: bossRow,
-    cx: (GRID_COLS-1) * (ROOM_W + CORRIDOR_W) + ROOM_W/2 + TILE,
-    cy: bossRow * (ROOM_H + CORRIDOR_W) + ROOM_H/2 + TILE,
-    x: (GRID_COLS-1) * (ROOM_W + CORRIDOR_W) + TILE,
-    y: bossRow * (ROOM_H + CORRIDOR_W) + TILE,
-    w: ROOM_W, h: ROOM_H,
-    type: ROOM_TYPE.BOSS, explored: false, cleared: false,
-    enemies: [], doors: []
-  };
+  const bossRoom = createRoom(0, GRID_COLS - 1, bossRow, ROOM_TYPE.BOSS);
 
   // Step 3: Generate main path from start to boss (random walk)
   let path = [{x: 0, y: startRow}];
