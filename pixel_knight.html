@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>像素骑士 — Pixel Knight</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a12; overflow: hidden; display: flex; justify-content: center; align-items: center; width: 100vw; height: 100vh; }
+  canvas { display: block; cursor: crosshair; }
+</style>
+</head>
+<body>
+<canvas id="game-canvas"></canvas>
+<script>
+// === CONFIG ===
+const GW = 960, GH = 640; // game resolution
+const TILE = 32;          // tile size for room grid
+
+// === STATE MACHINE ===
+const STATE = { MENU: 'menu', CHAR_SELECT: 'charSelect', PLAYING: 'playing', BOSS: 'boss', SHOP: 'shop', GAMEOVER: 'gameover', VICTORY: 'victory', PAUSED: 'paused' };
+let gameState = STATE.MENU;
+
+// === CANVAS SETUP ===
+const canvas = document.getElementById('game-canvas');
+const ctx = canvas.getContext('2d');
+canvas.width = GW;
+canvas.height = GH;
+
+function resizeCanvas() {
+  const scale = Math.min(window.innerWidth / GW, window.innerHeight / GH);
+  canvas.style.width = (GW * scale) + 'px';
+  canvas.style.height = (GH * scale) + 'px';
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// === INPUT ===
+const keys = {};
+const mouse = { x: 0, y: 0, down: false, worldX: 0, worldY: 0 };
+window.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefault(); });
+window.addEventListener('keyup', e => { keys[e.code] = false; e.preventDefault(); });
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = GW / rect.width;
+  const scaleY = GH / rect.height;
+  mouse.x = (e.clientX - rect.left) * scaleX;
+  mouse.y = (e.clientY - rect.top) * scaleY;
+});
+canvas.addEventListener('mousedown', e => { if (e.button === 0) mouse.down = true; });
+canvas.addEventListener('mouseup', e => { if (e.button === 0) mouse.down = false; });
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+// === GAME LOOP ===
+let lastTime = 0;
+function gameLoop(timestamp) {
+  requestAnimationFrame(gameLoop);
+  if (lastTime === 0) lastTime = timestamp;
+  let dt = (timestamp - lastTime) / 1000;
+  if (dt > 0.1) dt = 0.016;
+  lastTime = timestamp;
+  update(dt);
+  render();
+}
+// Stub update/render — will be filled in later tasks
+function update(dt) { /* scene dispatch */ }
+function render() { ctx.clearRect(0, 0, GW, GH); }
+
+requestAnimationFrame(gameLoop);
+console.log('Pixel Knight — shell ready');
+</script>
+</body>
+</html>
