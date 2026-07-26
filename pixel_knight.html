@@ -132,6 +132,21 @@ const BOSS_BUFFS = [
    { name:'弹幕穿透+1', apply:()=>{ player.buffs.pierce+=1; }}]
 ];
 
+// === TUNING ===
+const TUNING = {
+  enemyHpScale: [1.0, 1.4, 2.0],       // per floor
+  enemyDmgScale: [1.0, 1.3, 1.8],
+  bossHpScale: [1.0, 1.4, 2.0],
+  dropChanceWeapon: 0.35,
+  dropChanceHeart: 0.25,
+  dropChanceCoin: 0.40,
+  coinDropMin: 1, coinDropMax: 3,
+  shopHeartPrice: 8,
+  shopWeaponPrice: 25,
+  shopEnchantedPrice: 50,
+  shopEnergyPrice: 12,
+};
+
 // === BULLETS ===
 let bullets = [];
 let enemies = [];
@@ -146,6 +161,9 @@ let tentacleZones = [];    // vine_behemoth tentacles
 let sporeZones = [];       // vine_behemoth spores
 let lightningPillars = []; // thunder_lord pillars
 let stoneWalls = [];       // ancient_golem walls
+
+// === ROOM BOUNDS (world coords for player clamping) ===
+let roomBounds = { x: 0, y: 0, w: 100, h: 100 };
 
 // === DROPS & SHOP ===
 let drops = [];
@@ -223,6 +241,7 @@ canvas.addEventListener('click', e => {
     if (cx > GW/2 - 100 && cx < GW/2 + 100 && cy > 300 && cy < 350) {
       SFX.menuSelect();
       gameState = STATE.CHAR_SELECT;
+      return; // Prevent same click from triggering character select
     }
   }
   // CHAR_SELECT: click character cards
@@ -319,6 +338,7 @@ const player = {
     this.invincible = 0;
     this.weapons = [{ type: 'pistol', affix: null }]; // start pistol
     this.currentWeapon = 0;
+    this.fireRateMult = 1;
     this.fireTimer = 0;
     this.burstIndex = 0;
     this.burstTimer = 0;
@@ -340,6 +360,38 @@ const player = {
     // Clamp to current room
     this.x = Math.max(roomBounds.x + this.radius, Math.min(roomBounds.x + roomBounds.w - this.radius, this.x));
     this.y = Math.max(roomBounds.y + this.radius, Math.min(roomBounds.y + roomBounds.h - this.radius, this.y));
+    // Skill: knight charge dash
+    if (this.skillDash) {
+      this.x += Math.cos(this.skillDash.angle) * this.skillDash.speed * dt;
+      this.y += Math.sin(this.skillDash.angle) * this.skillDash.speed * dt;
+      this.skillDash.timer -= dt;
+      if (this.skillDash.timer <= 0) { this.skillDash = null; }
+    }
+    // Skill: assassin stealth -> burst on expire
+    if (this.skillStealth) {
+      this.skillStealth.timer -= dt;
+      if (this.skillStealth.timer <= 0 && this.skillStealth.damageReady) {
+        this.skillStealth.damageReady = false;
+        for (const enemy of enemies) {
+          if (!enemy.alive) continue;
+          const edx = enemy.x - this.x, edy = enemy.y - this.y;
+          if (Math.sqrt(edx*edx + edy*edy) < 70) {
+            enemy.takeDamage(10);
+            spawnParticles(enemy.x, enemy.y, '#ff6644', 4);
+          }
+        }
+        // Also damage boss if nearby
+        if (boss && boss.alive) {
+          const bdx = boss.x - this.x, bdy = boss.y - this.y;
+          if (Math.sqrt(bdx*bdx + bdy*bdy) < 70) {
+            boss.takeDamage(10);
+            spawnParticles(boss.x, boss.y, '#ff6644', 6);
+          }
+        }
+        spawnParticles(this.x, this.y, '#ff6644', 10);
+      }
+      if (this.skillStealth.timer <= -1.0) { this.skillStealth = null; }
+    }
     // Aiming — angle toward mouse world position
     this.angle = Math.atan2(mouse.worldY - this.y, mouse.worldX - this.x);
     // Skill cooldown
@@ -388,11 +440,54 @@ const player = {
     return this.hp <= 0;
   },
 
-  useSkill() {
+  activateSkill() {
     if (this.skillTimer > 0) return;
     this.skillTimer = this.skillCooldown;
     SFX.skill();
-    // Skill effects handled per-character in update
+    switch (this.charClass) {
+      case 'knight':
+        // Charge slash: dash forward and deal melee damage in arc
+        this.skillDash = { angle: this.angle, timer: 0.25, speed: 600 };
+        // Damage enemies in a frontal cone
+        for (const enemy of enemies) {
+          if (!enemy.alive) continue;
+          const dx = enemy.x - this.x, dy = enemy.y - this.y;
+          const dist = Math.sqrt(dx*dx + dy*dy);
+          if (dist < 60) {
+            const hitAngle = Math.atan2(dy, dx);
+            let angleDiff = hitAngle - this.angle;
+            while (angleDiff > Math.PI) angleDiff -= Math.PI*2;
+            while (angleDiff < -Math.PI) angleDiff += Math.PI*2;
+            if (Math.abs(angleDiff) < Math.PI/2.5) {
+              enemy.takeDamage(6);
+              spawnParticles(enemy.x, enemy.y, '#44aaff', 3);
+            }
+          }
+        }
+        spawnParticles(this.x, this.y, '#44aaff', 10);
+        break;
+      case 'mage':
+        // Frost Nova: freeze all enemies in radius, damage them
+        for (const enemy of enemies) {
+          if (!enemy.alive) continue;
+          const dx2 = enemy.x - this.x, dy2 = enemy.y - this.y;
+          if (Math.sqrt(dx2*dx2 + dy2*dy2) < 120) {
+            enemy.state.frozen = true;
+            enemy.state.frozenTimer = 2.5;
+            enemy.takeDamage(4);
+            spawnParticles(enemy.x, enemy.y, '#88ccff', 3);
+          }
+        }
+        spawnParticles(this.x, this.y, '#cc44ff', 15);
+        flashScreen(0.15);
+        break;
+      case 'assassin':
+        // Shadow Step: become invisible/invincible briefly, then deal burst damage
+        this.invincible = 1.5;
+        this.skillStealth = { timer: 0.5, damageReady: true };
+        spawnParticles(this.x, this.y, '#ff6644', 12);
+        break;
+    }
   },
 
   getWeapon() {
@@ -427,9 +522,14 @@ const player = {
 function createEnemy(type, x, y) {
   const data = ENEMY_DATA[type];
   if (!data) return null;
+  const floorIdx = Math.min((dungeon?.floorNum || 1) - 1, TUNING.enemyHpScale.length - 1);
+  const hpScale = TUNING.enemyHpScale[Math.max(0, floorIdx)];
+  const dmgScale = TUNING.enemyDmgScale[Math.max(0, floorIdx)];
+  const scaledHp = Math.round(data.hp * hpScale);
+  const scaledDmg = Math.round(data.damage * dmgScale);
   return {
-    type, x, y, hp: data.hp, maxHp: data.hp,
-    speed: data.speed, damage: data.damage, radius: data.radius,
+    type, x, y, hp: scaledHp, maxHp: scaledHp,
+    speed: data.speed, damage: scaledDmg, radius: data.radius,
     color: data.color, behavior: data.behavior,
     fireRate: data.fireRate || 1, fireTimer: Math.random(),
     score: data.score, coins: data.coins,
@@ -438,12 +538,21 @@ function createEnemy(type, x, y) {
     flashTimer: 0,
 
     update(dt) {
+      // Frozen state (from mage skill)
+      if (this.state.frozen) {
+        this.state.frozenTimer -= dt;
+        if (this.state.frozenTimer <= 0) { this.state.frozen = false; this.state.frozenTimer = 0; }
+      }
       this.fireTimer -= dt;
       this.flashTimer = Math.max(0, this.flashTimer - dt);
+      const frozenSlow = this.state.frozen ? 0.15 : 1;
       const dx = player.x - this.x;
       const dy = player.y - this.y;
       const dist = Math.sqrt(dx*dx + dy*dy) || 1;
       this.angle = Math.atan2(dy, dx);
+
+      const origSpeed = this.speed;
+      if (this.state.frozen) this.speed *= 0.15; // frozen slows movement to 15%
 
       switch (this.behavior) {
         case 'chase':
@@ -451,7 +560,7 @@ function createEnemy(type, x, y) {
           break;
         case 'shoot_straight':
           if (dist < 400 && dist > 60) { this.x += Math.cos(this.angle) * this.speed * 0.5 * dt; this.y += Math.sin(this.angle) * this.speed * 0.5 * dt; }
-          if (dist < 350 && this.fireTimer <= 0) { this.fireTimer = this.fireRate; spawnEnemyBullet(this.x, this.y, this.angle, 250, this.damage); }
+          if (dist < 350 && this.fireTimer <= 0 && !this.state.frozen) { this.fireTimer = this.fireRate; spawnEnemyBullet(this.x, this.y, this.angle, 250, this.damage); }
           break;
         case 'circle_dive':
           this.state.orbitAngle = (this.state.orbitAngle || 0) + 2 * dt;
@@ -472,11 +581,11 @@ function createEnemy(type, x, y) {
             const strafeAngle = this.angle + Math.PI/2;
             this.x += Math.cos(strafeAngle) * this.speed * dt * (Math.sin(Date.now()/1000) > 0 ? 1 : -1);
           }
-          if (dist < 400 && this.fireTimer <= 0) { this.fireTimer = this.fireRate; for (let i = -1; i <= 1; i++) { spawnEnemyBullet(this.x, this.y, this.angle + i*0.1, 300, this.damage); } }
+          if (dist < 400 && this.fireTimer <= 0 && !this.state.frozen) { this.fireTimer = this.fireRate; for (let i = -1; i <= 1; i++) { spawnEnemyBullet(this.x, this.y, this.angle + i*0.1, 300, this.damage); } }
           break;
         case 'summon_track':
           if (dist < 300 && dist > 100) { this.x -= Math.cos(this.angle) * this.speed * dt; this.y -= Math.sin(this.angle) * this.speed * dt; }
-          if (this.fireTimer <= 0) { this.fireTimer = this.fireRate; spawnEnemyBullet(this.x, this.y, this.angle, 180, this.damage, true); }
+          if (this.fireTimer <= 0 && !this.state.frozen) { this.fireTimer = this.fireRate; spawnEnemyBullet(this.x, this.y, this.angle, 180, this.damage, true); }
           break;
         case 'kamikaze':
           if (dist < 250) { this.x += Math.cos(this.angle) * this.speed * dt; this.y += Math.sin(this.angle) * this.speed * dt; }
@@ -486,7 +595,7 @@ function createEnemy(type, x, y) {
           if (dist < 300) {
             if (!this.state.dashing) { this.state.dashAngle = this.angle; this.state.dashTimer = 0; this.state.dashing = true; }
             this.state.dashTimer += dt;
-            const dashSpd = 400;
+            const dashSpd = 400 * frozenSlow;
             this.x += Math.cos(this.state.dashAngle) * dashSpd * dt;
             this.y += Math.sin(this.state.dashAngle) * dashSpd * dt;
             if (this.state.dashTimer > 1.0) { this.state.dashing = false; this.state.dashTimer = 0; }
@@ -494,13 +603,14 @@ function createEnemy(type, x, y) {
           break;
         case 'spin_laser':
           if (dist > 150) { this.x += Math.cos(this.angle) * this.speed * dt; this.y += Math.sin(this.angle) * this.speed * dt; }
-          if (this.fireTimer <= 0) { this.fireTimer = this.fireRate; this.state.laserAngle = (this.state.laserAngle || 0) + Math.PI/6; for (let a = 0; a < Math.PI * 2; a += Math.PI / 4) { spawnEnemyBullet(this.x, this.y, a + this.state.laserAngle, 200, this.damage); } }
+          if (this.fireTimer <= 0 && !this.state.frozen) { this.fireTimer = this.fireRate; this.state.laserAngle = (this.state.laserAngle || 0) + Math.PI/6; for (let a = 0; a < Math.PI * 2; a += Math.PI / 4) { spawnEnemyBullet(this.x, this.y, a + this.state.laserAngle, 200, this.damage); } }
           break;
         case 'throw_rock':
           if (dist > 150) { this.x += Math.cos(this.angle) * this.speed * dt; this.y += Math.sin(this.angle) * this.speed * dt; }
-          if (dist < 500 && this.fireTimer <= 0) { this.fireTimer = this.fireRate; spawnEnemyBullet(this.x, this.y, this.angle, 200, this.damage, false, true); }
+          if (dist < 500 && this.fireTimer <= 0 && !this.state.frozen) { this.fireTimer = this.fireRate; spawnEnemyBullet(this.x, this.y, this.angle, 200, this.damage, false, true); }
           break;
       }
+      this.speed = origSpeed;
     },
 
     takeDamage(amount) {
@@ -540,6 +650,16 @@ function createEnemy(type, x, y) {
         ctx.fillStyle = '#00ff00';
         ctx.fillRect(-10, -this.radius-8, 20*(this.hp/this.maxHp), 3);
       }
+      // Frozen visual
+      if (this.state.frozen) {
+        ctx.strokeStyle = '#88ccff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius + 6, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(136,204,255,0.3)';
+        ctx.fillRect(-this.radius, -this.radius, this.radius*2, this.radius*2);
+      }
       ctx.restore();
     }
   };
@@ -565,10 +685,13 @@ function switchWeapon(slot) {
 function startBossFight(bossType) {
   const data = BOSS_DATA[bossType];
   if (!data) return;
+  const floorIdx = Math.min((dungeon?.floorNum || 1) - 1, TUNING.bossHpScale.length - 1);
+  const hpScale = TUNING.bossHpScale[Math.max(0, floorIdx)];
+  const scaledBossHp = Math.round(data.hp * hpScale);
   boss = {
     type: bossType, name: data.name,
     x: getCurrentRoom().cx, y: getCurrentRoom().cy - 60,
-    hp: data.hp, maxHp: data.hp,
+    hp: scaledBossHp, maxHp: scaledBossHp,
     radius: data.radius, color: data.color,
     speed: data.phases[0].moveSpeed,
     phase: 0, phases: data.phases,
@@ -1126,6 +1249,21 @@ function renderRoom(ctx, room) {
     ctx.textAlign = 'center';
     ctx.fillText('🎩 商人', room.cx, room.cy + 75);
   }
+  // Chest room visual
+  if (room.type === ROOM_TYPE.CHEST && !room.cleared) {
+    const chestPulse = 1 + Math.sin(Date.now() / 300) * 0.15;
+    ctx.save();
+    ctx.translate(room.cx, room.cy);
+    ctx.font = (36 * chestPulse) + 'px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('🧰', 0, 0);
+    ctx.restore();
+    ctx.fillStyle = '#aaccff';
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('[E] 打开宝箱', room.cx, room.cy + 45);
+  }
 }
 
 // === ROOM TRANSITIONS ===
@@ -1144,8 +1282,13 @@ function enterRoom(roomId) {
   }
   // Boss room — start boss fight
   if (room.type === ROOM_TYPE.BOSS && !room.cleared) {
-    const floorBosses = Object.keys(BOSS_DATA).filter(k => BOSS_DATA[k].floor === dungeon.floorNum);
-    const bossType = floorBosses[randInt(0, floorBosses.length - 1)];
+    let bossType;
+    if (dungeon.floorNum >= 3) {
+      bossType = 'shadow_lord'; // Final boss on floor 3
+    } else {
+      const floorBosses = Object.keys(BOSS_DATA).filter(k => BOSS_DATA[k].floor === dungeon.floorNum);
+      bossType = floorBosses[randInt(0, floorBosses.length - 1)];
+    }
     startBossFight(bossType);
   }
 }
@@ -1166,6 +1309,10 @@ function spawnRoomEnemies(room) {
 function checkDoorCollision() {
   const room = getCurrentRoom();
   if (!room) return;
+  // Block door transitions if enemies or boss still alive
+  const hasAliveEnemies = enemies.some(e => e.alive);
+  const bossAlive = boss && boss.alive;
+  if (hasAliveEnemies || bossAlive) return;
   for (const door of room.doors) {
     const dx = player.x - door.x;
     const dy = player.y - door.y;
@@ -1269,7 +1416,7 @@ function renderEnemyBullets(ctx) {
 function spawnDrop(x, y, type) {
   const item = { x, y, type, life: 30 };
   if (type === 'heart') { item.emoji = '❤️'; item.color = '#ff4444'; }
-  else if (type === 'coin_pile') { item.emoji = '💰'; item.amount = 5+randInt(0,10); item.color = '#ffdd00'; }
+  else if (type === 'coin_pile') { item.emoji = '💰'; item.amount = randInt(TUNING.coinDropMin, TUNING.coinDropMax) * 3; item.color = '#ffdd00'; }
   else if (type === 'energy') { item.emoji = '⚡'; item.color = '#44aaff'; }
   else if (type === 'weapon') { /* filled by spawnRandomWeapon */ }
   drops.push(item);
@@ -1320,10 +1467,10 @@ function pickupItem(item) {
 function openShop() {
   gameState = STATE.SHOP;
   shopItems = [
-    { type:'heart', name:'血包', price:10, emoji:'❤️' },
-    { type:'weapon', name:'普通武器', price:30, weaponType:Object.keys(WEAPONS)[randInt(0,7)], affix:null, emoji:'🔫' },
-    { type:'weapon', name:'附魔武器', price:60, weaponType:Object.keys(WEAPONS)[randInt(0,7)], affix:Object.keys(AFFIXES)[randInt(0,6)], emoji:'✨' },
-    { type:'energy', name:'技能重置', price:15, emoji:'⚡' }
+    { type:'heart', name:'血包', price:TUNING.shopHeartPrice, emoji:'❤️' },
+    { type:'weapon', name:'普通武器', price:TUNING.shopWeaponPrice, weaponType:Object.keys(WEAPONS)[randInt(0,7)], affix:null, emoji:'🔫' },
+    { type:'weapon', name:'附魔武器', price:TUNING.shopEnchantedPrice, weaponType:Object.keys(WEAPONS)[randInt(0,7)], affix:Object.keys(AFFIXES)[randInt(0,6)], emoji:'✨' },
+    { type:'energy', name:'技能重置', price:TUNING.shopEnergyPrice, emoji:'⚡' }
   ];
 }
 
@@ -1419,9 +1566,15 @@ function renderParticles(ctx) {
 // === FLOOR PROGRESSION ===
 function advanceFloor() {
   if (dungeon.floorNum >= 3) {
-    // Final boss already defeated — victory
-    gameState = STATE.VICTORY;
-    saveHighScore();
+    // Should not normally happen (floor 3 boss is shadow_lord → victory),
+    // but if a non-shadow-lord boss was beaten on floor 3, regenerate floor 3
+    enemies = [];
+    bullets = [];
+    enemyBullets = [];
+    dungeon = generateFloor(3);
+    currentRoomIdx = dungeon.startRoomId;
+    enterRoom(currentRoomIdx);
+    player.hp = player.maxHp;
     return;
   }
   // Screen flash white
@@ -1797,6 +1950,7 @@ function update(dt) {
   if (gameState === STATE.PLAYING || gameState === STATE.BOSS) {
     if (keys['Digit1']) { keys['Digit1'] = false; switchWeapon(0); }
     if (keys['Digit2']) { keys['Digit2'] = false; switchWeapon(1); }
+    if (keys['Space']) { keys['Space'] = false; player.activateSkill(); }
   }
 
   // === Shop buying keys (when in shop state) ===
@@ -1820,8 +1974,24 @@ function update(dt) {
           drops.splice(i, 1);
         }
       }
-      // Shop interaction
+      // Chest room interaction
       const room = getCurrentRoom();
+      if (room && room.type === ROOM_TYPE.CHEST && !room.cleared) {
+        const cdx = player.x - room.cx, cdy = player.y - room.cy;
+        if (Math.sqrt(cdx*cdx + cdy*cdy) < 60) {
+          SFX.pickup();
+          showMessage('打开宝箱!', 2000);
+          if (Math.random() < TUNING.dropChanceWeapon) {
+            spawnRandomWeapon(room.cx, room.cy - 20);
+          }
+          if (Math.random() < TUNING.dropChanceHeart) {
+            spawnDrop(room.cx + 30, room.cy, 'heart');
+          }
+          spawnDrop(room.cx - 30, room.cy, 'coin_pile');
+          room.cleared = true;
+        }
+      }
+      // Shop interaction
       if (room && room.type === ROOM_TYPE.SHOP && !room.cleared) {
         const sx = room.cx, sy = room.cy + 40;
         const sdx = player.x - sx, sdy = player.y - sy;
@@ -1842,19 +2012,21 @@ function update(dt) {
   updateBullets(dt);
 
   // Boss update
-  if (boss && boss.alive && gameState === STATE.BOSS) {
-    boss.update(dt);
-    updateBossBullets(dt);
-    updateBossClones(dt);
-    updateTentacleZones(dt);
-    updateSporeZones(dt);
-    updateLightningPillars(dt);
-    updateStoneWalls(dt);
-    checkBulletBossCollision();
-    checkBossBulletPlayerCollision();
-    checkBossPlayerCollision();
-    checkBossClonesPlayerCollision();
-    // Check boss defeat
+  if (boss && gameState === STATE.BOSS) {
+    if (boss.alive) {
+      boss.update(dt);
+      updateBossBullets(dt);
+      updateBossClones(dt);
+      updateTentacleZones(dt);
+      updateSporeZones(dt);
+      updateLightningPillars(dt);
+      updateStoneWalls(dt);
+      checkBulletBossCollision();
+      checkBossBulletPlayerCollision();
+      checkBossPlayerCollision();
+      checkBossClonesPlayerCollision();
+    }
+    // Check boss defeat (outside alive check so it fires the frame after HP reaches 0)
     if (!boss.alive) { onBossDefeated(); }
   }
 
@@ -1870,9 +2042,13 @@ function update(dt) {
   const room = getCurrentRoom();
   if (room && room.type === ROOM_TYPE.COMBAT && !room.cleared && enemies.filter(e => e.alive).length === 0) {
     room.cleared = true;
-    if (Math.random() < 0.4) {
-      const dt = Math.random() < 0.5 ? 'heart' : 'coin_pile';
-      spawnDrop(room.cx, room.cy, dt);
+    // Use TUNING drop chances
+    if (Math.random() < TUNING.dropChanceWeapon) {
+      spawnRandomWeapon(room.cx, room.cy);
+    } else if (Math.random() < TUNING.dropChanceHeart) {
+      spawnDrop(room.cx, room.cy, 'heart');
+    } else if (Math.random() < TUNING.dropChanceCoin) {
+      spawnDrop(room.cx, room.cy, 'coin_pile');
     }
   }
 
