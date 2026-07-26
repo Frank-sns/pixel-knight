@@ -86,6 +86,124 @@ const camera = {
   }
 };
 
+// === CHARACTER DATA ===
+const CHARACTERS = {
+  knight: {
+    name: '骑士', emoji: '⚔️', color: '#44aaff',
+    hp: 5, speed: 200, skillName: '冲锋斩', skillCD: 10,
+    description: '均衡战士，向前冲刺斩击'
+  },
+  mage: {
+    name: '法师', emoji: '🔮', color: '#cc44ff',
+    hp: 3, speed: 240, skillName: '冰霜新星', skillCD: 8,
+    description: '冻结周围敌人，远程输出'
+  },
+  assassin: {
+    name: '刺客', emoji: '🗡️', color: '#ff6644',
+    hp: 4, speed: 280, skillName: '暗影步', skillCD: 12,
+    description: '隐身突袭，爆发伤害×3'
+  }
+};
+
+// === PLAYER ===
+const player = {
+  x: 0, y: 0, vx: 0, vy: 0,
+  radius: 14, angle: 0,
+  charClass: 'knight',
+  speed: 200,
+  hp: 5, maxHp: 5,
+  skillTimer: 0, skillCooldown: 10,
+  weapons: [], currentWeapon: 0,
+  coins: 0,
+  buffs: { damageMult: 1, speedMult: 1, pierce: 0, hpBonus: 0 },
+  invincible: 0,
+
+  init(chosenClass) {
+    const data = CHARACTERS[chosenClass];
+    this.charClass = chosenClass;
+    this.speed = data.speed;
+    this.maxHp = data.hp;
+    this.hp = data.hp;
+    this.skillCooldown = data.skillCD;
+    this.skillTimer = 0;
+    this.coins = 0;
+    this.buffs = { damageMult: 1, speedMult: 1, pierce: 0, hpBonus: 0 };
+    this.invincible = 0;
+    this.weapons = [{ type: 'pistol', affix: null }]; // start pistol
+    this.currentWeapon = 0;
+  },
+
+  update(dt) {
+    // Movement
+    this.vx = 0; this.vy = 0;
+    if (keys['KeyW'] || keys['ArrowUp']) this.vy = -1;
+    if (keys['KeyS'] || keys['ArrowDown']) this.vy = 1;
+    if (keys['KeyA'] || keys['ArrowLeft']) this.vx = -1;
+    if (keys['KeyD'] || keys['ArrowRight']) this.vx = 1;
+    // Normalize diagonal
+    if (this.vx !== 0 && this.vy !== 0) { this.vx *= 0.707; this.vy *= 0.707; }
+    const spd = this.speed * this.buffs.speedMult;
+    this.x += this.vx * spd * dt;
+    this.y += this.vy * spd * dt;
+    // Clamp to current room
+    this.x = Math.max(roomBounds.x + this.radius, Math.min(roomBounds.x + roomBounds.w - this.radius, this.x));
+    this.y = Math.max(roomBounds.y + this.radius, Math.min(roomBounds.y + roomBounds.h - this.radius, this.y));
+    // Aiming — angle toward mouse world position
+    this.angle = Math.atan2(mouse.worldY - this.y, mouse.worldX - this.x);
+    // Skill cooldown
+    this.skillTimer = Math.max(0, this.skillTimer - dt);
+    // Invincibility
+    this.invincible = Math.max(0, this.invincible - dt);
+    // Camera follow
+    camera.targetX = this.x;
+    camera.targetY = this.y;
+  },
+
+  takeDamage(amount) {
+    if (this.invincible > 0) return false;
+    this.hp -= amount;
+    this.invincible = 0.5;
+    camera.shake(6);
+    return this.hp <= 0;
+  },
+
+  useSkill() {
+    if (this.skillTimer > 0) return;
+    this.skillTimer = this.skillCooldown;
+    // Skill effects handled per-character in update
+  },
+
+  getWeapon() {
+    return this.weapons[this.currentWeapon] || null;
+  },
+
+  render(ctx) {
+    if (this.invincible > 0 && Math.floor(this.invincible * 20) % 2 === 0) return; // blink
+    const cd = CHARACTERS[this.charClass];
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    // Body
+    ctx.fillStyle = cd.color;
+    ctx.fillRect(-10, -8, 20, 16);
+    // Helmet/head
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(0, -6, 8, 0, Math.PI * 2);
+    ctx.fill();
+    // Weapon line pointing toward mouse
+    ctx.strokeStyle = '#ffcc00';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(6, 0);
+    ctx.lineTo(6 + Math.cos(this.angle) * 16, Math.sin(this.angle) * 16);
+    ctx.stroke();
+    ctx.restore();
+  }
+};
+
+// Room bounds placeholder — updated when entering a room
+let roomBounds = { x: -200, y: -150, w: 400, h: 300 };
+
 // === GAME LOOP ===
 let lastTime = 0;
 function gameLoop(timestamp) {
@@ -97,21 +215,44 @@ function gameLoop(timestamp) {
   update(dt);
   render();
 }
-// Stub update/render — will be filled in later tasks
-function update(dt) { /* scene dispatch */ }
+// Main update/render — player + camera driving the game loop
+function update(dt) {
+  player.update(dt);
+  camera.update(dt);
+}
 function render() {
   ctx.clearRect(0, 0, GW, GH);
   ctx.fillStyle = '#1a1a2e';
   ctx.fillRect(0, 0, GW, GH);
-  // Camera-transformed game rendering goes here
+  // Camera-transformed game rendering
   camera.applyTransform(ctx);
-  // ... draw game objects ...
+  // Draw room bounds grid
+  ctx.strokeStyle = '#333355';
+  ctx.lineWidth = 1;
+  for (let gx = roomBounds.x; gx <= roomBounds.x + roomBounds.w; gx += 50) {
+    ctx.beginPath();
+    ctx.moveTo(gx, roomBounds.y);
+    ctx.lineTo(gx, roomBounds.y + roomBounds.h);
+    ctx.stroke();
+  }
+  for (let gy = roomBounds.y; gy <= roomBounds.y + roomBounds.h; gy += 50) {
+    ctx.beginPath();
+    ctx.moveTo(roomBounds.x, gy);
+    ctx.lineTo(roomBounds.x + roomBounds.w, gy);
+    ctx.stroke();
+  }
+  // Room border
+  ctx.strokeStyle = '#555577';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(roomBounds.x, roomBounds.y, roomBounds.w, roomBounds.h);
+  player.render(ctx);
   camera.restore(ctx);
-  // HUD (screen-space) goes here
+  // HUD (screen-space)
 }
 
+player.init('knight');
 requestAnimationFrame(gameLoop);
-console.log('Pixel Knight — shell ready');
+console.log('Pixel Knight — player ready');
 </script>
 </body>
 </html>
