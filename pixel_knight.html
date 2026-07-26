@@ -373,7 +373,7 @@ function createEnemy(type, x, y) {
           break;
         case 'spin_laser':
           if (dist > 150) { this.x += Math.cos(this.angle) * this.speed * dt; this.y += Math.sin(this.angle) * this.speed * dt; }
-          if (this.fireTimer <= 0) { this.fireTimer = this.fireRate; this.state.laserAngle = (this.state.laserAngle || 0) + Math.PI/6; for (let a = 0; a < Math.PI * 2; a += Math.PI / 4) { spawnEnemyBullet(this.x, this.y, a, 200, this.damage); } }
+          if (this.fireTimer <= 0) { this.fireTimer = this.fireRate; this.state.laserAngle = (this.state.laserAngle || 0) + Math.PI/6; for (let a = 0; a < Math.PI * 2; a += Math.PI / 4) { spawnEnemyBullet(this.x, this.y, a + this.state.laserAngle, 200, this.damage); } }
           break;
         case 'throw_rock':
           if (dist > 150) { this.x += Math.cos(this.angle) * this.speed * dt; this.y += Math.sin(this.angle) * this.speed * dt; }
@@ -695,6 +695,12 @@ function updateEnemyBullets(dt) {
       const spd = Math.sqrt(eb.vx*eb.vx + eb.vy*eb.vy);
       eb.vx += Math.cos(tAngle) * spd * 2 * dt;
       eb.vy += Math.sin(tAngle) * spd * 2 * dt;
+      const newSpd = Math.sqrt(eb.vx*eb.vx + eb.vy*eb.vy);
+      const maxSpeed = 250;
+      if (newSpd > maxSpeed) {
+        eb.vx = (eb.vx / newSpd) * maxSpeed;
+        eb.vy = (eb.vy / newSpd) * maxSpeed;
+      }
     }
     if (eb.parabolic) {
       eb.vy += 300 * dt; // gravity
