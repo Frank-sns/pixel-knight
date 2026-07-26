@@ -154,6 +154,8 @@ let shopItems = [];
 let messageQueue = [];
 let flashAlpha = 0;
 let slowTimer = 0;
+let minimapExpanded = false;
+let prePauseState = null;
 
 function spawnBullet(x, y, angle, wType, affixKey) {
   const wData = WEAPONS[wType];
@@ -209,6 +211,34 @@ canvas.addEventListener('mousemove', e => {
 canvas.addEventListener('mousedown', e => { if (e.button === 0) mouse.down = true; });
 canvas.addEventListener('mouseup', e => { if (e.button === 0) mouse.down = false; });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('click', e => {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = GW / rect.width;
+  const scaleY = GH / rect.height;
+  const cx = (e.clientX - rect.left) * scaleX;
+  const cy = (e.clientY - rect.top) * scaleY;
+  // MENU: click play button (centered, 200x50 at y=300)
+  if (gameState === STATE.MENU) {
+    if (cx > GW/2 - 100 && cx < GW/2 + 100 && cy > 300 && cy < 350) {
+      SFX.menuSelect();
+      gameState = STATE.CHAR_SELECT;
+    }
+  }
+  // CHAR_SELECT: click character cards
+  if (gameState === STATE.CHAR_SELECT) {
+    const chars = Object.entries(CHARACTERS);
+    chars.forEach(([key, data], i) => {
+      const cardX = GW/4 * (i+1);
+      const cardY = 350;
+      if (cx > cardX - 80 && cx < cardX + 80 && cy > cardY - 70 && cy < cardY + 110) {
+        SFX.menuSelect();
+        player.init(key);
+        initGame();
+        gameState = STATE.PLAYING;
+      }
+    });
+  }
+});
 
 // === CAMERA ===
 const camera = {
@@ -324,6 +354,7 @@ const player = {
       if (this.fireTimer <= 0) {
         this.fireTimer = wData.fireRate * frMult;
         spawnBullet(this.x, this.y, this.angle, wp.type, wp.affix);
+        SFX.shoot();
         if (wData.burstDelay) {
           this.burstIndex = 1;
           this.burstTimer = wData.burstDelay;
@@ -333,6 +364,7 @@ const player = {
         this.burstTimer -= dt;
         if (this.burstTimer <= 0) {
           spawnBullet(this.x, this.y, this.angle, wp.type, wp.affix);
+          SFX.shoot();
           this.burstIndex++;
           this.burstTimer = wData.burstDelay;
         }
@@ -348,6 +380,7 @@ const player = {
   takeDamage(amount) {
     if (this.invincible > 0) return false;
     this.hp -= amount;
+    SFX.damage();
     this.invincible = 0.5;
     camera.shake(6);
     return this.hp <= 0;
@@ -356,6 +389,7 @@ const player = {
   useSkill() {
     if (this.skillTimer > 0) return;
     this.skillTimer = this.skillCooldown;
+    SFX.skill();
     // Skill effects handled per-character in update
   },
 
@@ -470,7 +504,7 @@ function createEnemy(type, x, y) {
     takeDamage(amount) {
       this.hp -= amount;
       this.flashTimer = 0.1;
-      if (this.hp <= 0) { this.alive = false; player.coins += this.coins; if (player.buffs.lifesteal > 0) { player.hp = Math.min(player.maxHp, player.hp + 0.5); } }
+      if (this.hp <= 0) { this.alive = false; player.coins += this.coins; if (player.buffs.lifesteal > 0) { player.hp = Math.min(player.maxHp, player.hp + 0.5); } SFX.enemyDeath(); }
     },
 
     explode() {
@@ -902,10 +936,11 @@ function onBossDefeated() {
   lightningPillars = [];
   stoneWalls = [];
 
+  SFX.bossExplosion();
+
   if (isFinalBoss) {
     gameState = STATE.VICTORY;
     saveHighScore();
-    SFX.bossExplosion();
   } else {
     gameState = STATE.PLAYING;
   }
@@ -1133,6 +1168,7 @@ function checkDoorCollision() {
     const dx = player.x - door.x;
     const dy = player.y - door.y;
     if (Math.sqrt(dx*dx + dy*dy) < 20) {
+      SFX.doorOpen();
       enterRoom(door.targetRoomId);
       return;
     }
@@ -1157,6 +1193,7 @@ function checkBulletEnemyCollisions() {
           if (Math.abs(angleDiff) < Math.PI/2.5) continue;
         }
         enemy.takeDamage(b.damage);
+        SFX.hit();
         if (b.pierce <= 0) { bullets.splice(bi, 1); break; }
         else b.pierce--;
       }
@@ -1253,6 +1290,7 @@ function spawnRandomWeapon(x, y) {
 }
 
 function pickupItem(item) {
+  SFX.pickup();
   switch (item.type) {
     case 'heart':
       player.hp = Math.min(player.maxHp, player.hp + 1);
@@ -1327,12 +1365,51 @@ function saveHighScore() {
     scores.push({ score: player.coins, date: new Date().toISOString() });
     scores.sort((a, b) => b.score - a.score);
     localStorage.setItem('pixelKnightScores', JSON.stringify(scores.slice(0, 10)));
+    // Also update simple high score for renderMenu
+    const currentHigh = parseInt(localStorage.getItem('pixel_knight_highscore') || '0');
+    if (player.coins > currentHigh) {
+      localStorage.setItem('pixel_knight_highscore', player.coins.toString());
+    }
   } catch(e) {}
 }
 
-// === HELPER: SFX stubs ===
+// === AUDIO: Web Audio API Sound Effects ===
+let audioCtx = null;
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
 const SFX = {
-  bossExplosion() { /* placeholder for sound effect */ }
+  play(freq, duration, type, volume, ramp) {
+    try {
+      const ctx = getAudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type || 'square';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(volume || 0.1, ctx.currentTime);
+      if (ramp) gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+      else gain.gain.linearRampToValueAtTime(0, ctx.currentTime + duration);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + duration);
+    } catch(e) { /* audio not supported */ }
+  },
+
+  shoot() { this.play(800, 0.05, 'square', 0.05); },
+  hit() { this.play(200, 0.08, 'sawtooth', 0.08, true); },
+  enemyDeath() { this.play(150, 0.15, 'triangle', 0.06, true); },
+  bossExplosion() {
+    this.play(60, 0.5, 'sawtooth', 0.15, true);
+    setTimeout(() => this.play(40, 0.4, 'square', 0.1, true), 200);
+  },
+  pickup() { this.play(600, 0.06, 'sine', 0.08); setTimeout(() => this.play(900, 0.06, 'sine', 0.08), 60); },
+  menuSelect() { this.play(440, 0.1, 'sine', 0.1); setTimeout(() => this.play(660, 0.1, 'sine', 0.1), 80); },
+  skill() { this.play(300, 0.2, 'triangle', 0.12); setTimeout(() => this.play(500, 0.15, 'triangle', 0.1), 100); },
+  doorOpen() { this.play(250, 0.12, 'sine', 0.06); },
+  damage() { this.play(100, 0.1, 'sawtooth', 0.12, true); }
 };
 
 // === BULLET UPDATE / RENDER ===
@@ -1606,6 +1683,34 @@ function gameLoop(timestamp) {
 }
 // Main update/render — player + camera driving the game loop
 function update(dt) {
+  // === MENU NAVIGATION KEYS ===
+  // Tab: toggle minimap expanded (during gameplay)
+  if (keys['Tab']) {
+    keys['Tab'] = false;
+    if (gameState === STATE.PLAYING || gameState === STATE.BOSS || gameState === STATE.SHOP) {
+      minimapExpanded = !minimapExpanded;
+    }
+  }
+  // Esc: pause/resume or close shop
+  if (keys['Escape']) {
+    keys['Escape'] = false;
+    if (gameState === STATE.PLAYING || gameState === STATE.BOSS) {
+      prePauseState = gameState;
+      gameState = STATE.PAUSED;
+    } else if (gameState === STATE.PAUSED) {
+      gameState = prePauseState || STATE.PLAYING;
+    } else if (gameState === STATE.SHOP) {
+      gameState = STATE.PLAYING;
+    }
+  }
+  // Enter: return to menu from gameover/victory
+  if (keys['Enter']) {
+    keys['Enter'] = false;
+    if (gameState === STATE.GAMEOVER || gameState === STATE.VICTORY) {
+      gameState = STATE.MENU;
+    }
+  }
+
   // UI overlay updates
   flashAlpha = Math.max(0, flashAlpha - dt);
   slowTimer = Math.max(0, slowTimer - dt);
@@ -1663,12 +1768,10 @@ function update(dt) {
     }
   }
 
-  // Escape to close shop
-  if (keys['Escape'] && gameState === STATE.SHOP) {
-    keys['Escape'] = false;
-    gameState = STATE.PLAYING;
-  }
+  // Escape to close shop (handled above in key block, but keep as safety)
 
+  // === GAME SIMULATION (only during active gameplay) ===
+  if (gameState === STATE.PLAYING || gameState === STATE.BOSS || gameState === STATE.SHOP) {
   player.update(dt);
   updateBullets(dt);
 
@@ -1710,6 +1813,7 @@ function update(dt) {
   // Game over check
   if (player.hp <= 0 && gameState !== STATE.GAMEOVER && gameState !== STATE.VICTORY) {
     gameState = STATE.GAMEOVER;
+    saveHighScore();
     drops = [];
     shopItems = [];
     boss = null;
@@ -1721,11 +1825,186 @@ function update(dt) {
     stoneWalls = [];
   }
   camera.update(dt);
+  } // end game simulation if-block
 }
+// === RENDER FUNCTIONS ===
+
+function renderHUD(ctx) {
+  // Top bar
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, 0, GW, 44);
+
+  // HP hearts
+  ctx.font = '20px monospace';
+  for (let i = 0; i < player.maxHp; i++) {
+    ctx.fillText(i < player.hp ? '❤️' : '🖤', 12 + i * 28, 30);
+  }
+
+  // Coins & floor
+  ctx.fillStyle = '#ffdd00';
+  ctx.fillText('💰 ' + player.coins, 12 + player.maxHp * 28 + 20, 30);
+  ctx.fillStyle = '#aaccff';
+  ctx.fillText('第' + (dungeon?.floorNum || '?') + '层', GW - 150, 30);
+
+  // Bottom bar
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, GH - 60, GW, 60);
+
+  // Current weapon
+  const wp = player.getWeapon();
+  if (wp) {
+    const wData = WEAPONS[wp.type];
+    const affixName = wp.affix ? AFFIXES[wp.affix].name : '';
+    ctx.fillStyle = wp.affix ? AFFIXES[wp.affix].color : '#ffffff';
+    ctx.fillText('[1] ' + affixName + wData.name + ' ' + wData.emoji, 16, GH - 30);
+  }
+  // Other weapon
+  if (player.weapons.length > 1) {
+    const otherIdx = player.currentWeapon === 0 ? 1 : 0;
+    const wp2 = player.weapons[otherIdx];
+    const wData2 = WEAPONS[wp2.type];
+    const affixName2 = wp2.affix ? AFFIXES[wp2.affix].name : '';
+    const slotLabel = otherIdx === 0 ? '[1]' : '[2]';
+    ctx.fillText(slotLabel + ' ' + affixName2 + wData2.name + ' ' + wData2.emoji, 16, GH - 10);
+  }
+
+  // Skill status
+  const cd = CHARACTERS[player.charClass];
+  const ready = player.skillTimer <= 0;
+  ctx.fillStyle = ready ? '#00ff88' : '#ff4444';
+  ctx.fillText('[Space] ' + cd.skillName + ' ' + (ready ? '✅' : Math.ceil(player.skillTimer)+'s'), GW - 250, GH - 20);
+}
+
+function renderMinimap(ctx) {
+  if (!dungeon) return;
+  const mmX = minimapExpanded ? GW/2 - 200 : GW - 150;
+  const mmY = minimapExpanded ? GH/2 - 150 : 50;
+  const mmW = minimapExpanded ? 400 : 135;
+  const mmH = minimapExpanded ? 300 : 105;
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(mmX, mmY, mmW, mmH);
+  ctx.strokeStyle = '#334466';
+  ctx.strokeRect(mmX, mmY, mmW, mmH);
+
+  const cellW = mmW / GRID_COLS, cellH = mmH / GRID_ROWS;
+  for (const room of dungeon.rooms) {
+    const rx = mmX + room.gridX * cellW + 2;
+    const ry = mmY + room.gridY * cellH + 2;
+    if (room.explored) {
+      ctx.fillStyle = room.type === ROOM_TYPE.BOSS ? '#ff3333' :
+                      room.type === ROOM_TYPE.SHOP ? '#ffcc00' :
+                      room.type === ROOM_TYPE.CHEST ? '#44ccff' : '#445566';
+      ctx.fillRect(rx, ry, cellW - 4, cellH - 4);
+    }
+    if (room.id === currentRoomIdx) {
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(rx - 1, ry - 1, cellW - 2, cellH - 2);
+    }
+  }
+}
+
+function renderMenu(ctx) {
+  ctx.fillStyle = '#0a0a12';
+  ctx.fillRect(0, 0, GW, GH);
+  // Title
+  ctx.font = 'bold 56px monospace';
+  ctx.fillStyle = '#ffcc00';
+  ctx.textAlign = 'center';
+  ctx.fillText('像 素 骑 士', GW/2, 180);
+  ctx.font = '18px monospace';
+  ctx.fillStyle = '#667788';
+  ctx.fillText('Pixel Knight — 地牢探索射击', GW/2, 220);
+  // Play button
+  ctx.fillStyle = '#00aacc';
+  ctx.fillRect(GW/2 - 100, 300, 200, 50);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 22px monospace';
+  ctx.fillText('开 始 游 戏', GW/2, 333);
+  // High score
+  const hs = localStorage.getItem('pixel_knight_highscore') || 0;
+  ctx.font = '16px monospace';
+  ctx.fillStyle = '#888888';
+  ctx.fillText('最高分: ' + hs, GW/2, 400);
+  ctx.textAlign = 'start';
+}
+
+function renderCharSelect(ctx) {
+  ctx.fillStyle = '#0a0a12';
+  ctx.fillRect(0, 0, GW, GH);
+  ctx.font = 'bold 32px monospace';
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.fillText('选择角色', GW/2, 80);
+  // 3 character cards
+  const chars = Object.entries(CHARACTERS);
+  chars.forEach(([key, data], i) => {
+    const cx = GW/4 * (i+1);
+    const cy = 350;
+    ctx.fillStyle = 'rgba(20,20,40,0.9)';
+    ctx.fillRect(cx-80, cy-70, 160, 180);
+    ctx.strokeStyle = data.color;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(cx-80, cy-70, 160, 180);
+    ctx.font = '40px monospace';
+    ctx.fillText(data.emoji, cx, cy-30);
+    ctx.font = 'bold 18px monospace';
+    ctx.fillStyle = data.color;
+    ctx.fillText(data.name, cx, cy+10);
+    ctx.font = '13px monospace';
+    ctx.fillStyle = '#888888';
+    ctx.fillText('❤️ x' + data.hp, cx, cy+35);
+    ctx.fillText('技能: ' + data.skillName, cx, cy+55);
+    ctx.fillText(data.description, cx, cy+75);
+  });
+  ctx.textAlign = 'start';
+}
+
+function renderGameOver(ctx) {
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, 0, GW, GH);
+  ctx.font = 'bold 48px monospace';
+  ctx.fillStyle = '#ff4444';
+  ctx.textAlign = 'center';
+  ctx.fillText('阵 亡', GW/2, 250);
+  ctx.font = '18px monospace';
+  ctx.fillStyle = '#aaaaaa';
+  ctx.fillText('到达: 第' + (dungeon?.floorNum||1) + '层 | 金币: ' + player.coins, GW/2, 310);
+  ctx.fillText('按 Enter 返回菜单', GW/2, 380);
+  ctx.textAlign = 'start';
+}
+
+function renderVictory(ctx) {
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, 0, GW, GH);
+  ctx.font = 'bold 48px monospace';
+  ctx.fillStyle = '#ffdd00';
+  ctx.textAlign = 'center';
+  ctx.fillText('🏆 胜 利 🏆', GW/2, 250);
+  ctx.font = '18px monospace';
+  ctx.fillStyle = '#aaaaaa';
+  ctx.fillText('击败了暗影领主! 金币: ' + player.coins, GW/2, 310);
+  ctx.fillText('按 Enter 返回菜单', GW/2, 380);
+  ctx.textAlign = 'start';
+}
+
 function render() {
   ctx.clearRect(0, 0, GW, GH);
+
+  // === DISPATCH BY GAME STATE ===
+  if (gameState === STATE.MENU) {
+    renderMenu(ctx);
+    return;
+  }
+  if (gameState === STATE.CHAR_SELECT) {
+    renderCharSelect(ctx);
+    return;
+  }
+
+  // === GAMEPLAY STATES: PLAYING, BOSS, SHOP, GAMEOVER, VICTORY, PAUSED ===
   ctx.fillStyle = '#1a1a2e';
   ctx.fillRect(0, 0, GW, GH);
+
   // Camera-transformed game rendering
   camera.applyTransform(ctx);
   // Draw dungeon room
@@ -1764,7 +2043,10 @@ function render() {
 
   camera.restore(ctx);
 
-  // === HUD (screen-space) ===
+  // === SCREEN-SPACE UI ===
+  renderHUD(ctx);
+  renderMinimap(ctx);
+
   // Boss HP bar (top-center)
   if (boss && boss.alive && gameState === STATE.BOSS) {
     const barW = 300, barH = 16, barX = GW/2 - barW/2, barY = 12;
@@ -1780,35 +2062,6 @@ function render() {
     ctx.font = '12px monospace';
     ctx.textAlign = 'center';
     ctx.fillText(boss.name + ' ' + Math.ceil(boss.hp) + '/' + boss.maxHp, GW/2, barY + 13);
-  }
-
-  // HP
-  ctx.fillStyle = '#ff4444';
-  ctx.font = '14px monospace';
-  ctx.textAlign = 'left';
-  ctx.fillText('❤️ ' + player.hp + '/' + player.maxHp, 16, 22);
-  // Coins
-  ctx.fillStyle = '#ffcc00';
-  ctx.fillText('💰 ' + player.coins, 16, 44);
-  // Floor
-  if (dungeon) {
-    ctx.fillStyle = '#aaaacc';
-    ctx.fillText('楼层: ' + dungeon.floorNum, 16, 66);
-  }
-  // Skill cooldown
-  if (player.skillTimer > 0) {
-    ctx.fillStyle = '#ffaa00';
-    ctx.fillText('技能: ' + player.skillTimer.toFixed(1) + 's', 16, 88);
-  }
-
-  // Weapon info
-  const cwp = player.getWeapon();
-  if (cwp) {
-    const wd = WEAPONS[cwp.type];
-    ctx.fillStyle = '#ffffff';
-    ctx.textAlign = 'left';
-    ctx.fillText('武器: ' + wd.emoji + ' ' + wd.name + (cwp.affix ? ' [' + AFFIXES[cwp.affix].emoji + ']' : ''), 16, GH - 16);
-    ctx.fillText('按 1/2 切换武器', 16, GH - 36);
   }
 
   // === SHOP UI ===
@@ -1860,6 +2113,29 @@ function render() {
     ctx.fillText('按 E 或 Esc 关闭', GW/2, GH - 50);
   }
 
+  // === GAME OVER OVERLAY ===
+  if (gameState === STATE.GAMEOVER) {
+    renderGameOver(ctx);
+  }
+
+  // === VICTORY OVERLAY ===
+  if (gameState === STATE.VICTORY) {
+    renderVictory(ctx);
+  }
+
+  // === PAUSED OVERLAY ===
+  if (gameState === STATE.PAUSED) {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, 0, GW, GH);
+    ctx.font = 'bold 36px monospace';
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.fillText('⏸ 暂停', GW/2, GH/2 - 10);
+    ctx.font = '16px monospace';
+    ctx.fillStyle = '#888888';
+    ctx.fillText('按 Esc 继续', GW/2, GH/2 + 30);
+  }
+
   // === UI OVERLAYS ===
   // Screen flash (white overlay)
   if (flashAlpha > 0) {
@@ -1884,38 +2160,21 @@ function render() {
     ctx.fillStyle = 'rgba(136,204,255,0.15)';
     ctx.fillRect(0, 0, GW, GH);
   }
-
-  // Game Over overlay
-  if (gameState === STATE.GAMEOVER) {
-    ctx.fillStyle = 'rgba(0,0,0,0.75)';
-    ctx.fillRect(0, 0, GW, GH);
-    ctx.fillStyle = '#ff4444';
-    ctx.font = '36px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText('你输了 / GAME OVER', GW/2, GH/2 - 20);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '16px monospace';
-    ctx.fillText('刷新页面重新开始 / Refresh to restart', GW/2, GH/2 + 20);
-  }
-
-  // Victory overlay
-  if (gameState === STATE.VICTORY) {
-    ctx.fillStyle = 'rgba(0,0,0,0.75)';
-    ctx.fillRect(0, 0, GW, GH);
-    ctx.fillStyle = '#ffcc00';
-    ctx.font = '36px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText('胜利！/ VICTORY!', GW/2, GH/2 - 30);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '16px monospace';
-    ctx.fillText('得分 / Score: ' + player.coins + ' 💰', GW/2, GH/2 + 10);
-    ctx.fillText('刷新页面重新开始 / Refresh to restart', GW/2, GH/2 + 40);
-  }
 }
 
 // === GAME INIT ===
 function initGame() {
-  player.init('knight');
+  // Initialize a new game run with dungeon generation
+  bullets = [];
+  enemyBullets = [];
+  enemies = [];
+  bossBullets = [];
+  bossClones = [];
+  tentacleZones = [];
+  sporeZones = [];
+  lightningPillars = [];
+  stoneWalls = [];
+  boss = null;
   dungeon = generateFloor(1);
   currentRoomIdx = dungeon.startRoomId;
   gameState = STATE.PLAYING;
@@ -1925,9 +2184,10 @@ function initGame() {
   console.log('Dungeon generated:', dungeon);
 }
 
-initGame();
+// Start at main menu
+gameState = STATE.MENU;
 requestAnimationFrame(gameLoop);
-console.log('Pixel Knight — player ready');
+console.log('Pixel Knight — ready');
 </script>
 </body>
 </html>
