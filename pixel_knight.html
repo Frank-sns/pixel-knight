@@ -19,7 +19,7 @@ const TILE = 32;          // tile size for room grid
 
 // === MAP GENERATION ===
 const ROOM_TYPE = { START: 'start', COMBAT: 'combat', CHEST: 'chest', SHOP: 'shop', BOSS: 'boss' };
-const GRID_COLS = 4, GRID_ROWS = 3;
+const GRID_COLS = 5, GRID_ROWS = 3;
 const ROOM_W = 20 * TILE, ROOM_H = 14 * TILE; // 640x448 — spacious rooms
 const CORRIDOR_W = 2 * TILE;
 
@@ -134,17 +134,17 @@ const BOSS_BUFFS = [
 
 // === TUNING ===
 const TUNING = {
-  enemyHpScale: [0.8, 1.1, 1.4],       // per floor — gentler scaling
-  enemyDmgScale: [0.8, 1.0, 1.2],
-  bossHpScale: [0.9, 1.1, 1.4],
-  dropChanceWeapon: 0.45,
-  dropChanceHeart: 0.40,
-  dropChanceCoin: 0.55,
+  enemyHpScale: [0.9, 1.2, 1.6],       // per floor — moderate challenge
+  enemyDmgScale: [0.9, 1.1, 1.3],
+  bossHpScale: [1.0, 1.3, 1.6],
+  dropChanceWeapon: 0.40,
+  dropChanceHeart: 0.35,
+  dropChanceCoin: 0.50,
   coinDropMin: 2, coinDropMax: 5,
-  shopHeartPrice: 5,
-  shopWeaponPrice: 18,
-  shopEnchantedPrice: 35,
-  shopEnergyPrice: 6,
+  shopHeartPrice: 6,
+  shopWeaponPrice: 20,
+  shopEnchantedPrice: 38,
+  shopEnergyPrice: 7,
   // Room entry protection
   roomEntryDelay: 1.8,  // seconds of invincibility + enemy freeze on room entry
 };
@@ -160,6 +160,7 @@ let boss = null;
 let bossBullets = [];
 let bossClones = [];        // shadow_lord clones
 let roomEntryTimer = 0;     // grace period on room entry (seconds remaining)
+let turrets = [];            // engineer turrets
 let tentacleZones = [];    // vine_behemoth tentacles
 let sporeZones = [];       // vine_behemoth spores
 let lightningPillars = []; // thunder_lord pillars
@@ -319,9 +320,9 @@ canvas.addEventListener('click', e => {
   if (gameState === STATE.CHAR_SELECT) {
     const chars = Object.entries(CHARACTERS);
     chars.forEach(([key, data], i) => {
-      const cardX = GW/4 * (i+1);
-      const cardY = 350;
-      if (cx > cardX - 80 && cx < cardX + 80 && cy > cardY - 70 && cy < cardY + 110) {
+      const cardX = GW/6 * (i+1);
+      const cardY = 370;
+      if (cx > cardX - 70 && cx < cardX + 70 && cy > cardY - 130 && cy < cardY + 130) {
         SFX.menuSelect();
         player.init(key);
         initGame();
@@ -389,6 +390,22 @@ const CHARACTERS = {
     startWeapon: 'smg',
     passive: { name: '疾影', desc: '移速+20%，暴击率+15%', speedMult: 1.20, critChance: 0.15 },
     bodyShape: 'triangle' // 三角形 — 锐利突刺感
+  },
+  archer: {
+    name: '弓手', emoji: '🏹', color: '#44ff88',
+    hp: 4, speed: 220, skillName: '箭雨', skillCD: 9,
+    description: '远程狙击，箭雨覆盖',
+    startWeapon: 'bow',
+    passive: { name: '精准', desc: '暴击率+25%，子弹速度+20%', critChance: 0.25 },
+    bodyShape: 'diamond' // 菱形 — 轻灵身法
+  },
+  engineer: {
+    name: '工匠', emoji: '🛠️', color: '#ffaa44',
+    hp: 5, speed: 180, skillName: '炮台部署', skillCD: 14,
+    description: '放置自动炮台，火力压制',
+    startWeapon: 'laser',
+    passive: { name: '机械精通', desc: '子弹穿透+1，击杀额外金币', pierceBonus: 1 },
+    bodyShape: 'square' // 方形 — 重装机甲
   }
 };
 
@@ -417,7 +434,7 @@ const player = {
     this.buffs = {
       damageMult: data.passive.damageMult || 1,
       speedMult: data.passive.speedMult || 1,
-      pierce: 0,
+      pierce: data.passive.pierceBonus || 0,
       hpBonus: data.passive.hpBonus || 0
     };
     this.fireRateMult = data.passive.fireRateMult || 1;
@@ -573,6 +590,25 @@ const player = {
         this.invincible = 1.5;
         this.skillStealth = { timer: 0.5, damageReady: true };
         spawnParticles(this.x, this.y, '#ff6644', 12);
+        break;
+      case 'archer':
+        // Arrow Rain: fire 8 arrows in a spread toward mouse
+        for (let i = -3; i <= 4; i++) {
+          const arrowAngle = this.angle + i * 0.12;
+          spawnBullet(this.x, this.y, arrowAngle, 'bow', 'fire');
+        }
+        spawnParticles(this.x, this.y, '#44ff88', 8);
+        break;
+      case 'engineer':
+        // Turret Deployment: place an auto-turret at player position
+        turrets.push({
+          x: this.x, y: this.y,
+          timer: 7.0,
+          fireTimer: 0, fireRate: 0.3,
+          radius: 10, color: '#ffaa44'
+        });
+        spawnParticles(this.x, this.y, '#ffaa44', 12);
+        showMessage('炮台已部署!', 2000);
         break;
     }
   },
@@ -2287,6 +2323,35 @@ function update(dt) {
     }
   }
 
+  // Turret update
+  for (let i = turrets.length - 1; i >= 0; i--) {
+    const t = turrets[i];
+    t.timer -= dt;
+    if (t.timer <= 0) { turrets.splice(i, 1); continue; }
+    // Find nearest enemy in range
+    let nearest = null, nearestDist = 250;
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      const dx = e.x - t.x, dy = e.y - t.y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist < nearestDist) { nearestDist = dist; nearest = e; }
+    }
+    // Also target boss
+    if (boss && boss.alive) {
+      const dx = boss.x - t.x, dy = boss.y - t.y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist < nearestDist) { nearestDist = dist; nearest = boss; }
+    }
+    if (nearest) {
+      t.angle = Math.atan2(nearest.y - t.y, nearest.x - t.x);
+      t.fireTimer -= dt;
+      if (t.fireTimer <= 0) {
+        t.fireTimer = t.fireRate;
+        spawnBullet(t.x, t.y, t.angle, 'pistol', 'fire');
+      }
+    }
+  }
+
   // Enemy update
   enemies.forEach(e => { if (!e.frozen) e.update(dt); });
   enemies = enemies.filter(e => e.alive);
@@ -2480,9 +2545,9 @@ function renderCharSelect(ctx) {
   // 3 character cards
   const chars = Object.entries(CHARACTERS);
   chars.forEach(([key, data], i) => {
-    const cx = GW/4 * (i+1);
+    const cx = GW/6 * (i+1);
     const cy = 370;
-    const cardW = 170, cardH = 260;
+    const cardW = 140, cardH = 260;
     ctx.fillStyle = 'rgba(20,20,40,0.9)';
     ctx.fillRect(cx-cardW/2, cy-cardH/2, cardW, cardH);
     ctx.strokeStyle = data.color;
@@ -2574,6 +2639,20 @@ function render() {
   renderRoom(ctx, getCurrentRoom());
   // Render enemies and enemy bullets
   enemies.forEach(e => e.render(ctx));
+  // Render turrets
+  for (const t of turrets) {
+    ctx.save(); ctx.translate(t.x, t.y);
+    ctx.fillStyle = t.color;
+    ctx.fillRect(-t.radius, -t.radius, t.radius*2, t.radius*2);
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
+    ctx.strokeRect(-t.radius, -t.radius, t.radius*2, t.radius*2);
+    // Turret barrel
+    if (t.angle !== undefined) {
+      ctx.strokeStyle = '#ffdd00'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(6, 0); ctx.lineTo(18, 0); ctx.stroke();
+    }
+    ctx.restore();
+  }
   renderEnemyBullets(ctx);
   player.render(ctx);
   renderBullets(ctx);
@@ -2756,6 +2835,7 @@ function initGame() {
   boss = null;
   bossQueue = [];
   roomEntryTimer = 0;
+  turrets = [];
   dungeon = generateFloor(1);
   currentRoomIdx = dungeon.startRoomId;
   gameState = STATE.PLAYING;
