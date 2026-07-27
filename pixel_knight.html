@@ -20,8 +20,8 @@ const TILE = 32;          // tile size for room grid
 // === MAP GENERATION ===
 const ROOM_TYPE = { START: 'start', COMBAT: 'combat', CHEST: 'chest', SHOP: 'shop', BOSS: 'boss' };
 const GRID_COLS = 4, GRID_ROWS = 3;
-const ROOM_W = 10 * TILE, ROOM_H = 7 * TILE; // 320x224
-const CORRIDOR_W = 3 * TILE;
+const ROOM_W = 20 * TILE, ROOM_H = 14 * TILE; // 640x448 — spacious rooms
+const CORRIDOR_W = 2 * TILE;
 
 let dungeon = null; // { rooms[], corridors[], floorNum }
 let currentRoomIdx = -1;
@@ -1489,7 +1489,7 @@ function enterRoom(roomId) {
 
 function spawnRoomEnemies(room) {
   enemies = enemies.filter(e => e.alive);
-  const count = 2 + Math.floor(Math.random() * 3) + dungeon.floorNum;
+  const count = 5 + Math.floor(Math.random() * 5) + dungeon.floorNum * 2; // more enemies for larger rooms
   const validTypes = Object.keys(ENEMY_DATA).filter(t => ENEMY_DATA[t].floor <= dungeon.floorNum);
   for (let i = 0; i < count; i++) {
     const type = validTypes[randInt(0, validTypes.length - 1)];
