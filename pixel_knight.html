@@ -161,6 +161,7 @@ let bossBullets = [];
 let bossClones = [];        // shadow_lord clones
 let roomEntryTimer = 0;     // grace period on room entry (seconds remaining)
 let turrets = [];            // engineer turrets
+let lightningBolts = [];     // lightning visual effects
 let tentacleZones = [];    // vine_behemoth tentacles
 let sporeZones = [];       // vine_behemoth spores
 let lightningPillars = []; // thunder_lord pillars
@@ -250,15 +251,16 @@ function spawnBullet(x, y, angle, wType, affixKey) {
     return; // Don't create a bullet
   }
 
+  const spawned = [];
   const count = wData.count || 1;
   for (let i = 0; i < count; i++) {
     const spreadAngle = angle + (Math.random() - 0.5) * wData.spread * 2;
-    bullets.push({
+    const bullet = {
       x, y,
       vx: Math.cos(spreadAngle) * wData.speed,
       vy: Math.sin(spreadAngle) * wData.speed,
       weapon: wType, affix: affixKey,
-      damage: wData.damage * player.buffs.damageMult,
+      damage: wData.damage * player.buffs.damageMult * (Math.random() < (player.critChance || 0) ? 2.5 : 1),
       pierce: wData.pierce + player.buffs.pierce,
       color: affixKey ? AFFIXES[affixKey].color : wData.color,
       life: 3,
@@ -267,8 +269,11 @@ function spawnBullet(x, y, angle, wType, affixKey) {
       arc: wData.arc || 0,
       isBeam: wType === 'laser',
       poisonStacks: {}
-    });
+    };
+    bullets.push(bullet);
+    spawned.push(bullet);
   }
+  return spawned;
 }
 
 // === CANVAS SETUP ===
@@ -369,7 +374,7 @@ const camera = {
 const CHARACTERS = {
   knight: {
     name: '骑士', emoji: '⚔️', color: '#44aaff',
-    hp: 5, speed: 200, skillName: '冲锋斩', skillCD: 10,
+    hp: 5, speed: 280, skillName: '冲锋斩', skillCD: 10,
     description: '均衡战士，向前冲刺斩击',
     startWeapon: 'shotgun',
     passive: { name: '坚韧', desc: '伤害+10%，血量+1', damageMult: 1.10, hpBonus: 1 },
@@ -377,7 +382,7 @@ const CHARACTERS = {
   },
   mage: {
     name: '法师', emoji: '🔮', color: '#cc44ff',
-    hp: 3, speed: 240, skillName: '冰霜新星', skillCD: 8,
+    hp: 3, speed: 330, skillName: '冰霜新星', skillCD: 8,
     description: '冻结周围敌人，远程输出',
     startWeapon: 'staff',
     passive: { name: '奥术', desc: '射速+25%，技能CD-2s', fireRateMult: 1.25, skillCDReduction: 2 },
@@ -385,7 +390,7 @@ const CHARACTERS = {
   },
   assassin: {
     name: '刺客', emoji: '🗡️', color: '#ff6644',
-    hp: 4, speed: 280, skillName: '暗影步', skillCD: 12,
+    hp: 4, speed: 360, skillName: '暗影步', skillCD: 12,
     description: '隐身突袭，爆发伤害×3',
     startWeapon: 'smg',
     passive: { name: '疾影', desc: '移速+20%，暴击率+15%', speedMult: 1.20, critChance: 0.15 },
@@ -393,7 +398,7 @@ const CHARACTERS = {
   },
   archer: {
     name: '弓手', emoji: '🏹', color: '#44ff88',
-    hp: 4, speed: 220, skillName: '箭雨', skillCD: 9,
+    hp: 4, speed: 310, skillName: '箭雨', skillCD: 9,
     description: '远程狙击，箭雨覆盖',
     startWeapon: 'bow',
     passive: { name: '精准', desc: '暴击率+25%，子弹速度+20%', critChance: 0.25 },
@@ -401,7 +406,7 @@ const CHARACTERS = {
   },
   engineer: {
     name: '工匠', emoji: '🛠️', color: '#ffaa44',
-    hp: 5, speed: 180, skillName: '炮台部署', skillCD: 14,
+    hp: 5, speed: 260, skillName: '炮台部署', skillCD: 14,
     description: '放置自动炮台，火力压制',
     startWeapon: 'laser',
     passive: { name: '机械精通', desc: '子弹穿透+1，击杀额外金币', pierceBonus: 1 },
@@ -507,25 +512,40 @@ const player = {
     if (wp && mouse.down && (gameState === STATE.PLAYING || gameState === STATE.BOSS)) {
       const wData = WEAPONS[wp.type];
       const frMult = this.fireRateMult || 1;
-      this.fireTimer -= dt;
-      if (this.fireTimer <= 0) {
-        this.fireTimer = wData.fireRate * frMult;
-        spawnBullet(this.x, this.y, this.angle, wp.type, wp.affix);
-        SFX.shoot();
-        if (wData.burstDelay) {
-          this.burstIndex = 1;
-          this.burstTimer = wData.burstDelay;
+      // Charged weapon (bow) — build charge while holding
+      if (wData.type === 'charged') {
+        this.chargeTimer = (this.chargeTimer || 0) + dt;
+        const maxCharge = 1.2;
+        if (this.chargeTimer >= maxCharge) {
+          this.chargeTimer = 0;
+          this.fireTimer = wData.fireRate * frMult;
+          const b = spawnBullet(this.x, this.y, this.angle, wp.type, wp.affix);
+          if (b) b.forEach(bul => { bul.damage *= 2.0; bul.pierce += 2; }); // charged: 2x damage, +2 pierce
+          SFX.shoot();
         }
-      }
-      if (this.burstIndex > 0 && this.burstIndex < (wData.burstCount || 0)) {
-        this.burstTimer -= dt;
-        if (this.burstTimer <= 0) {
+      } else {
+        this.fireTimer -= dt;
+        if (this.fireTimer <= 0) {
+          this.fireTimer = wData.fireRate * frMult;
           spawnBullet(this.x, this.y, this.angle, wp.type, wp.affix);
           SFX.shoot();
-          this.burstIndex++;
-          this.burstTimer = wData.burstDelay;
+          if (wData.burstDelay) {
+            this.burstIndex = 1;
+            this.burstTimer = wData.burstDelay;
+          }
+        }
+        if (this.burstIndex > 0 && this.burstIndex < (wData.burstCount || 0)) {
+          this.burstTimer -= dt;
+          if (this.burstTimer <= 0) {
+            spawnBullet(this.x, this.y, this.angle, wp.type, wp.affix);
+            SFX.shoot();
+            this.burstIndex++;
+            this.burstTimer = wData.burstDelay;
+          }
         }
       }
+    } else {
+      this.chargeTimer = 0; // reset charge on release
     }
     // Camera follow
     camera.targetX = this.x;
@@ -1617,10 +1637,25 @@ function checkBulletEnemyCollisions() {
               enemy.y += (kdy/kdist) * 60;
               break;
             case 'lightning':
+              // Chain to nearest enemy within 150px on hit
+              let nearest = null, nearestDist = 150;
+              for (const e2 of enemies) {
+                if (e2 === enemy || !e2.alive || e2.state.lightningHit) continue;
+                const dx2 = enemy.x - e2.x, dy2 = enemy.y - e2.y;
+                const d2 = Math.sqrt(dx2*dx2 + dy2*dy2);
+                if (d2 < nearestDist) { nearestDist = d2; nearest = e2; }
+              }
+              if (nearest) {
+                nearest.takeDamage(b.damage * 0.6);
+                nearest.state.lightningHit = true;
+                spawnParticles(nearest.x, nearest.y, '#ffdd00', 4);
+                // Draw lightning line visual
+                lightningBolts.push({x1: enemy.x, y1: enemy.y, x2: nearest.x, y2: nearest.y, life: 0.3});
+              }
               enemy.state.lightningMark = true;
               break;
             case 'lifesteal':
-              player.hp = Math.min(player.maxHp, player.hp + 0.5);
+              player.hp = Math.min(player.maxHp, player.hp + 1);
               break;
           }
         }
@@ -2392,6 +2427,11 @@ function update(dt) {
 
   camera.update(dt);
   updateParticles(dt);
+  // Update lightning bolts
+  for (let i = lightningBolts.length - 1; i >= 0; i--) {
+    lightningBolts[i].life -= dt;
+    if (lightningBolts[i].life <= 0) lightningBolts.splice(i, 1);
+  }
   } // end game simulation if-block
 }
 // === RENDER FUNCTIONS ===
@@ -2442,7 +2482,19 @@ function renderHUD(ctx) {
   const cd = CHARACTERS[player.charClass];
   const ready = player.skillTimer <= 0;
   ctx.fillStyle = ready ? '#00ff88' : '#ff4444';
-  ctx.fillText('[Space] ' + cd.skillName + ' ' + (ready ? '✅' : Math.ceil(player.skillTimer)+'s'), GW - 250, GH - 20);
+  ctx.fillText('[Space] ' + cd.skillName + ' ' + (ready ? '✅' : Math.ceil(player.skillTimer)+'s'), GW - 260, GH - 20);
+  // Bow charge indicator
+  const wp2 = player.getWeapon();
+  if (wp2 && WEAPONS[wp2.type] && WEAPONS[wp2.type].type === 'charged' && player.chargeTimer > 0) {
+    const chargePct = Math.min(1, player.chargeTimer / 1.2);
+    ctx.fillStyle = '#222222';
+    ctx.fillRect(GW - 260, GH - 48, 120, 12);
+    ctx.fillStyle = chargePct >= 1 ? '#ffdd00' : '#ff8800';
+    ctx.fillRect(GW - 260, GH - 48, 120 * chargePct, 12);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '10px monospace';
+    ctx.fillText(chargePct >= 1 ? '🔴 MAX' : '🏹 ' + Math.floor(chargePct*100) + '%', GW - 255, GH - 38);
+  }
 }
 
 function renderMinimap(ctx) {
@@ -2637,6 +2689,40 @@ function render() {
   camera.applyTransform(ctx);
   // Draw dungeon room
   renderRoom(ctx, getCurrentRoom());
+  // Render corridors between explored rooms
+  if (dungeon && dungeon.corridors) {
+    for (const cor of dungeon.corridors) {
+      const rA = getRoom(cor.from), rB = getRoom(cor.to);
+      if (!rA || !rB) continue;
+      if (!rA.explored && !rB.explored) continue;
+      // Draw corridor path
+      ctx.strokeStyle = '#2a2a3e';
+      ctx.lineWidth = Math.min(ROOM_W, ROOM_H) * 0.15;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(rA.cx, rA.cy);
+      ctx.lineTo(rB.cx, rB.cy);
+      ctx.stroke();
+      ctx.lineCap = 'butt';
+      // Center line (lighter)
+      ctx.strokeStyle = '#3a3a4e';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(rA.cx, rA.cy);
+      ctx.lineTo(rB.cx, rB.cy);
+      ctx.stroke();
+      // Floor dots along corridor
+      ctx.fillStyle = '#444466';
+      const len = Math.sqrt((rB.cx-rA.cx)**2 + (rB.cy-rA.cy)**2);
+      const steps = Math.floor(len / 40);
+      for (let s = 1; s < steps; s++) {
+        const t = s / steps;
+        ctx.beginPath();
+        ctx.arc(rA.cx + (rB.cx-rA.cx)*t, rA.cy + (rB.cy-rA.cy)*t, 3, 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+  }
   // Render enemies and enemy bullets
   enemies.forEach(e => e.render(ctx));
   // Render turrets
@@ -2684,6 +2770,18 @@ function render() {
   }
 
   renderParticles(ctx);
+  // Render lightning bolts
+  for (const lb of lightningBolts) {
+    ctx.strokeStyle = '#ffdd00';
+    ctx.lineWidth = 2.5;
+    ctx.globalAlpha = lb.life / 0.3;
+    ctx.beginPath(); ctx.moveTo(lb.x1, lb.y1); ctx.lineTo(lb.x2, lb.y2); ctx.stroke();
+    // Glow
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(lb.x1, lb.y1); ctx.lineTo(lb.x2, lb.y2); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
 
   camera.restore(ctx);
 
