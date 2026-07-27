@@ -162,6 +162,8 @@ let bossClones = [];        // shadow_lord clones
 let roomEntryTimer = 0;     // grace period on room entry (seconds remaining)
 let turrets = [];            // engineer turrets
 let lightningBolts = [];     // lightning visual effects
+let floatingTexts = [];      // damage/kill popups
+let muzzleFlashes = [];      // muzzle flash effects
 let tentacleZones = [];    // vine_behemoth tentacles
 let sporeZones = [];       // vine_behemoth spores
 let lightningPillars = []; // thunder_lord pillars
@@ -521,6 +523,7 @@ const player = {
           this.fireTimer = wData.fireRate * frMult;
           const b = spawnBullet(this.x, this.y, this.angle, wp.type, wp.affix);
           if (b) b.forEach(bul => { bul.damage *= 2.0; bul.pierce += 2; }); // charged: 2x damage, +2 pierce
+          muzzleFlashes.push({x: this.x + Math.cos(this.angle)*18, y: this.y + Math.sin(this.angle)*18, life: 0.08, color: WEAPONS[wp.type].color});
           SFX.shoot();
         }
       } else {
@@ -528,6 +531,7 @@ const player = {
         if (this.fireTimer <= 0) {
           this.fireTimer = wData.fireRate * frMult;
           spawnBullet(this.x, this.y, this.angle, wp.type, wp.affix);
+          muzzleFlashes.push({x: this.x + Math.cos(this.angle)*18, y: this.y + Math.sin(this.angle)*18, life: 0.08, color: WEAPONS[wp.type].color});
           SFX.shoot();
           if (wData.burstDelay) {
             this.burstIndex = 1;
@@ -538,6 +542,7 @@ const player = {
           this.burstTimer -= dt;
           if (this.burstTimer <= 0) {
             spawnBullet(this.x, this.y, this.angle, wp.type, wp.affix);
+            muzzleFlashes.push({x: this.x + Math.cos(this.angle)*18, y: this.y + Math.sin(this.angle)*18, life: 0.08, color: WEAPONS[wp.type].color});
             SFX.shoot();
             this.burstIndex++;
             this.burstTimer = wData.burstDelay;
@@ -837,7 +842,9 @@ function createEnemy(type, x, y) {
     takeDamage(amount) {
       this.hp -= amount;
       this.flashTimer = 0.1;
-      if (this.hp <= 0) { this.alive = false; player.coins += this.coins; if (player.buffs.lifesteal > 0) { player.hp = Math.min(player.maxHp, player.hp + 0.5); }
+      if (this.hp <= 0) { this.alive = false; player.coins += this.coins;
+        floatingTexts.push({x: this.x, y: this.y, text: '+' + this.coins + '💰', life: 1.0, color: '#ffdd00', vy: -60});
+        if (player.buffs.lifesteal > 0) { player.hp = Math.min(player.maxHp, player.hp + 1); }
         // Lightning chain on death
         if (this.state.lightningMark) {
           const chainTargets = enemies
@@ -922,6 +929,12 @@ function switchWeapon(slot) {
 function startBossFight(bossType) {
   const data = BOSS_DATA[bossType];
   if (!data) return;
+  // Dramatic boss intro
+  const room = getCurrentRoom();
+  flashScreen(0.3);
+  camera.shake(12);
+  spawnParticles(room.cx, room.cy, '#ff0000', 40);
+  floatingTexts.push({x: room.cx, y: room.cy - 40, text: data.name + ' 出现!', life: 2.5, color: data.color, vy: -30});
   const floorIdx = Math.min((dungeon?.floorNum || 1) - 1, TUNING.bossHpScale.length - 1);
   const hpScale = TUNING.bossHpScale[Math.max(0, floorIdx)];
   const scaledBossHp = Math.round(data.hp * hpScale);
@@ -1449,28 +1462,107 @@ function generateFloor(floorNum) {
 function renderRoom(ctx, room) {
   if (!room) return;
   if (!room.explored) return;
-  // Floor
-  ctx.fillStyle = room.type === ROOM_TYPE.BOSS ? '#1a0a0a' : '#1a1a2e';
+
+  const floorNum = dungeon?.floorNum || 1;
+  // Floor themes per level
+  const themes = {
+    1: { floor: '#1a1e28', wall: '#2a3344', accent: '#3a4455', name: '地牢入口' },
+    2: { floor: '#1a1a22', wall: '#332a2a', accent: '#553322', name: '地下洞穴' },
+    3: { floor: '#0f0f1a', wall: '#2a2233', accent: '#442255', name: '深渊神殿' }
+  };
+  const theme = themes[Math.min(floorNum, 3)] || themes[1];
+
+  // Floor with subtle gradient
+  const grad = ctx.createLinearGradient(room.x, room.y, room.x, room.y + room.h);
+  grad.addColorStop(0, theme.floor);
+  grad.addColorStop(0.5, room.type === ROOM_TYPE.BOSS ? '#1a0808' : theme.floor);
+  grad.addColorStop(1, theme.floor);
+  ctx.fillStyle = grad;
   ctx.fillRect(room.x, room.y, room.w, room.h);
-  // Walls (thick borders)
-  ctx.strokeStyle = room.type === ROOM_TYPE.BOSS ? '#ff333388' : '#334466';
-  ctx.lineWidth = 4;
-  ctx.strokeRect(room.x - 2, room.y - 2, room.w + 4, room.h + 4);
-  // Floor pattern — grid lines
+
+  // Floor tile pattern — staggered bricks
   ctx.strokeStyle = 'rgba(255,255,255,0.03)';
   ctx.lineWidth = 1;
-  for (let tx = room.x; tx < room.x + room.w; tx += TILE) {
-    for (let ty = room.y; ty < room.y + room.h; ty += TILE) {
+  for (let row = 0; row < Math.ceil(room.h / TILE); row++) {
+    const offset = (row % 2) * (TILE / 2);
+    for (let col = -1; col < Math.ceil(room.w / TILE) + 1; col++) {
+      const tx = room.x + col * TILE + offset;
+      const ty = room.y + row * TILE;
       ctx.strokeRect(tx, ty, TILE, TILE);
     }
   }
-  // Doorways
-  ctx.fillStyle = '#0a0a18';
-  for (const door of room.doors) {
-    ctx.fillRect(door.x - 14, door.y - 14, 28, 28);
-    ctx.strokeStyle = '#556677';
-    ctx.strokeRect(door.x - 14, door.y - 14, 28, 28);
+
+  // Random floor cracks/details
+  ctx.strokeStyle = 'rgba(255,255,255,0.02)';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i < 8; i++) {
+    const cx = room.x + 30 + (room.w - 60) * ((i * 137 + 50) % 100) / 100;
+    const cy = room.y + 30 + (room.h - 60) * ((i * 251 + 30) % 100) / 100;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + (i % 3 - 1) * 15, cy + (i % 2) * 10);
+    ctx.stroke();
   }
+
+  // Walls — thick layered brick border
+  const wallColors = room.type === ROOM_TYPE.BOSS
+    ? ['#ff333344', '#66111166', '#33000088']
+    : [theme.wall, theme.accent, '#1a1a2288'];
+  for (let layer = 2; layer >= 0; layer--) {
+    const inset = layer * 3;
+    ctx.strokeStyle = wallColors[layer];
+    ctx.lineWidth = 5 - layer;
+    ctx.strokeRect(room.x - inset, room.y - inset, room.w + inset*2, room.h + inset*2);
+  }
+
+  // Corner pillar decorations
+  const corners = [
+    {x: room.x - 2, y: room.y - 2},
+    {x: room.x + room.w + 2, y: room.y - 2},
+    {x: room.x - 2, y: room.y + room.h + 2},
+    {x: room.x + room.w + 2, y: room.y + room.h + 2}
+  ];
+  for (const c of corners) {
+    ctx.fillStyle = theme.accent;
+    ctx.fillRect(c.x - 6, c.y - 6, 12, 12);
+    ctx.strokeStyle = theme.wall;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(c.x - 6, c.y - 6, 12, 12);
+  }
+
+  // Doorways — arched gates with glow
+  for (const door of room.doors) {
+    // Door frame (larger, arched)
+    ctx.fillStyle = '#0a0a12';
+    ctx.beginPath();
+    ctx.arc(door.x, door.y, 16, 0, Math.PI * 2);
+    ctx.fill();
+    // Glow ring
+    const dirGrad = ctx.createRadialGradient(door.x, door.y, 12, door.x, door.y, 22);
+    dirGrad.addColorStop(0, 'rgba(100,150,255,0)');
+    dirGrad.addColorStop(0.5, 'rgba(100,150,255,0.08)');
+    dirGrad.addColorStop(1, 'rgba(100,150,255,0)');
+    ctx.fillStyle = dirGrad;
+    ctx.beginPath();
+    ctx.arc(door.x, door.y, 22, 0, Math.PI * 2);
+    ctx.fill();
+    // Frame border
+    ctx.strokeStyle = '#667788';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(door.x, door.y, 16, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // Room type indicator in center
+  if (room.type === ROOM_TYPE.COMBAT && !room.cleared && enemies.filter(e => e.alive).length > 0) {
+    // Subtle combat zone indicator — faint cross on floor
+    ctx.strokeStyle = 'rgba(255,100,100,0.03)';
+    ctx.lineWidth = 20;
+    ctx.beginPath(); ctx.moveTo(room.cx, room.y + 10); ctx.lineTo(room.cx, room.y + room.h - 10); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(room.x + 10, room.cy); ctx.lineTo(room.x + room.w - 10, room.cy); ctx.stroke();
+  }
+
   // Shopkeeper NPC in shop rooms
   if (room.type === ROOM_TYPE.SHOP) {
     const sx = room.cx, sy = room.cy + 40;
@@ -2399,6 +2491,11 @@ function update(dt) {
   const room = getCurrentRoom();
   if (room && room.type === ROOM_TYPE.COMBAT && !room.cleared && enemies.filter(e => e.alive).length === 0) {
     room.cleared = true;
+    // Room clear celebration!
+    spawnParticles(room.cx, room.cy, '#ffdd00', 20);
+    spawnParticles(room.cx, room.cy, '#ff8800', 15);
+    flashScreen(0.1);
+    floatingTexts.push({x: room.cx, y: room.cy - 30, text: '清除! ✨', life: 1.5, color: '#ffdd00', vy: -40});
     // Use TUNING drop chances
     if (Math.random() < TUNING.dropChanceWeapon) {
       spawnRandomWeapon(room.cx, room.cy);
@@ -2431,6 +2528,17 @@ function update(dt) {
   for (let i = lightningBolts.length - 1; i >= 0; i--) {
     lightningBolts[i].life -= dt;
     if (lightningBolts[i].life <= 0) lightningBolts.splice(i, 1);
+  }
+  // Update floating texts
+  for (let i = floatingTexts.length - 1; i >= 0; i--) {
+    const ft = floatingTexts[i];
+    ft.life -= dt; ft.y += (ft.vy || -50) * dt;
+    if (ft.life <= 0) floatingTexts.splice(i, 1);
+  }
+  // Update muzzle flashes
+  for (let i = muzzleFlashes.length - 1; i >= 0; i--) {
+    muzzleFlashes[i].life -= dt;
+    if (muzzleFlashes[i].life <= 0) muzzleFlashes.splice(i, 1);
   }
   } // end game simulation if-block
 }
@@ -2758,18 +2866,62 @@ function render() {
   for (const d of drops) {
     if (d.life <= 0) continue;
     ctx.save();
-    const pulse = 1 + Math.sin(Date.now() / 200 + d.x) * 0.1;
-    ctx.translate(d.x, d.y);
-    ctx.font = (18 * pulse) + 'px monospace';
+    const bob = Math.sin(Date.now() / 400 + d.x * 0.1) * 3; // bobbing
+    const pulse = 1 + Math.sin(Date.now() / 250 + d.x * 0.05) * 0.08;
+    ctx.translate(d.x, d.y + bob);
+    ctx.scale(pulse, pulse);
+
+    // Glow aura underneath
+    const glow = ctx.createRadialGradient(0, 0, 4, 0, 0, 22);
+    glow.addColorStop(0, (d.color || '#ffffff') + '66');
+    glow.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath(); ctx.arc(0, 0, 22, 0, Math.PI*2); ctx.fill();
+
+    // Shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.beginPath(); ctx.ellipse(0, 10, 10, 4, 0, 0, Math.PI*2); ctx.fill();
+
+    // Item emoji
+    ctx.font = (20 * pulse) + 'px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = d.color || '#ffffff';
     ctx.globalAlpha = Math.min(d.life / 5, 1);
-    ctx.fillText(d.emoji || '?', 0, 0);
+    ctx.fillText(d.emoji || '?', 0, -2);
+
+    // Weapon name label
+    if (d.type === 'weapon' && d.name) {
+      ctx.font = 'bold 10px monospace';
+      ctx.fillStyle = '#ffffff';
+      ctx.globalAlpha = Math.min(d.life / 5, 1) * 0.8;
+      ctx.fillText(d.name, 0, 16);
+    }
     ctx.restore();
   }
 
   renderParticles(ctx);
+  // Render floating texts
+  for (const ft of floatingTexts) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, ft.life / 0.5);
+    ctx.font = 'bold 14px monospace';
+    ctx.fillStyle = ft.color;
+    ctx.textAlign = 'center';
+    ctx.fillText(ft.text, ft.x, ft.y);
+    ctx.restore();
+  }
+  // Render muzzle flashes
+  for (const mf of muzzleFlashes) {
+    const alpha = mf.life / 0.08;
+    const r = 12 * alpha;
+    const grad2 = ctx.createRadialGradient(mf.x, mf.y, 0, mf.x, mf.y, r);
+    grad2.addColorStop(0, '#ffffff');
+    grad2.addColorStop(0.4, mf.color);
+    grad2.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad2;
+    ctx.beginPath(); ctx.arc(mf.x, mf.y, r, 0, Math.PI*2); ctx.fill();
+  }
   // Render lightning bolts
   for (const lb of lightningBolts) {
     ctx.strokeStyle = '#ffdd00';
