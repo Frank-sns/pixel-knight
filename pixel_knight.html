@@ -366,17 +366,26 @@ const CHARACTERS = {
   knight: {
     name: '骑士', emoji: '⚔️', color: '#44aaff',
     hp: 5, speed: 200, skillName: '冲锋斩', skillCD: 10,
-    description: '均衡战士，向前冲刺斩击'
+    description: '均衡战士，向前冲刺斩击',
+    startWeapon: 'shotgun',
+    passive: { name: '坚韧', desc: '伤害+10%，血量+1', damageMult: 1.10, hpBonus: 1 },
+    bodyShape: 'square' // 方形 — 重甲感
   },
   mage: {
     name: '法师', emoji: '🔮', color: '#cc44ff',
     hp: 3, speed: 240, skillName: '冰霜新星', skillCD: 8,
-    description: '冻结周围敌人，远程输出'
+    description: '冻结周围敌人，远程输出',
+    startWeapon: 'staff',
+    passive: { name: '奥术', desc: '射速+25%，技能CD-2s', fireRateMult: 1.25, skillCDReduction: 2 },
+    bodyShape: 'diamond' // 菱形 — 飘逸法袍
   },
   assassin: {
     name: '刺客', emoji: '🗡️', color: '#ff6644',
     hp: 4, speed: 280, skillName: '暗影步', skillCD: 12,
-    description: '隐身突袭，爆发伤害×3'
+    description: '隐身突袭，爆发伤害×3',
+    startWeapon: 'smg',
+    passive: { name: '疾影', desc: '移速+20%，暴击率+15%', speedMult: 1.20, critChance: 0.15 },
+    bodyShape: 'triangle' // 三角形 — 锐利突刺感
   }
 };
 
@@ -397,16 +406,23 @@ const player = {
     const data = CHARACTERS[chosenClass];
     this.charClass = chosenClass;
     this.speed = data.speed;
-    this.maxHp = data.hp;
-    this.hp = data.hp;
-    this.skillCooldown = data.skillCD;
+    this.maxHp = data.hp + (data.passive.hpBonus || 0);
+    this.hp = this.maxHp;
+    this.skillCooldown = data.skillCD - (data.passive.skillCDReduction || 0);
     this.skillTimer = 0;
     this.coins = 0;
-    this.buffs = { damageMult: 1, speedMult: 1, pierce: 0, hpBonus: 0 };
+    this.buffs = {
+      damageMult: data.passive.damageMult || 1,
+      speedMult: data.passive.speedMult || 1,
+      pierce: 0,
+      hpBonus: data.passive.hpBonus || 0
+    };
+    this.fireRateMult = data.passive.fireRateMult || 1;
+    this.critChance = data.passive.critChance || 0;
     this.invincible = 0;
-    this.weapons = [{ type: 'pistol', affix: null }]; // start pistol
+    // Character-specific starting weapon
+    this.weapons = [{ type: data.startWeapon, affix: null }];
     this.currentWeapon = 0;
-    this.fireRateMult = 1;
     this.fireTimer = 0;
     this.burstIndex = 0;
     this.burstTimer = 0;
@@ -567,21 +583,63 @@ const player = {
     const cd = CHARACTERS[this.charClass];
     ctx.save();
     ctx.translate(this.x, this.y);
-    // Body
+    ctx.rotate(this.angle);
+    const shape = cd.bodyShape || 'square';
+    // Draw body based on character shape
     ctx.fillStyle = cd.color;
-    ctx.fillRect(-10, -8, 20, 16);
-    // Helmet/head
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+
+    if (shape === 'square') {
+      // Knight — heavy armor box
+      ctx.fillRect(-11, -10, 22, 20);
+      ctx.strokeRect(-11, -10, 22, 20);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(-3, -4, 6, 8);
+    } else if (shape === 'diamond') {
+      // Mage — flowing robe diamond
+      ctx.beginPath();
+      ctx.moveTo(0, -12); ctx.lineTo(11, 0); ctx.lineTo(0, 10); ctx.lineTo(-11, 0);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(0, 0, 3, 0, Math.PI*2); ctx.fill();
+    } else if (shape === 'triangle') {
+      // Assassin — sharp upward triangle
+      ctx.beginPath();
+      ctx.moveTo(0, -12); ctx.lineTo(10, 10); ctx.lineTo(-10, 10);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(0, -10); ctx.lineTo(0, 6); ctx.stroke();
+    }
+
+    // Head
     ctx.fillStyle = '#ffffff';
     ctx.beginPath();
-    ctx.arc(0, -6, 8, 0, Math.PI * 2);
+    ctx.arc(0, shape === 'triangle' ? -10 : -9, 7, 0, Math.PI * 2);
     ctx.fill();
-    // Weapon line pointing toward mouse
-    ctx.strokeStyle = '#ffcc00';
+    ctx.strokeStyle = cd.color;
+    ctx.stroke();
+
+    // Weapon line ahead
+    ctx.strokeStyle = '#ffdd00';
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(6, 0);
-    ctx.lineTo(6 + Math.cos(this.angle) * 16, Math.sin(this.angle) * 16);
+    ctx.moveTo(8, 0);
+    ctx.lineTo(22, 0);
     ctx.stroke();
+
+    // Skill aura glow when ready
+    if (this.skillTimer <= 0) {
+      ctx.strokeStyle = cd.color;
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.4 + Math.sin(Date.now()/300) * 0.3;
+      ctx.beginPath();
+      ctx.arc(0, 0, this.radius + 6, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
     ctx.restore();
   }
 };
@@ -2261,9 +2319,12 @@ function renderHUD(ctx) {
     ctx.fillText(i < player.hp ? '❤️' : '🖤', 12 + i * 28, 30);
   }
 
-  // Coins & floor
+  // Coins & character info
   ctx.fillStyle = '#ffdd00';
   ctx.fillText('💰 ' + player.coins, 12 + player.maxHp * 28 + 20, 30);
+  const cd2 = CHARACTERS[player.charClass];
+  ctx.fillStyle = cd2.color;
+  ctx.fillText(cd2.emoji + ' ' + cd2.name + ' | ' + cd2.passive.name + ': ' + cd2.passive.desc, GW/2 - 160, 30);
   ctx.fillStyle = '#aaccff';
   ctx.fillText('第' + (dungeon?.floorNum || '?') + '层', GW - 150, 30);
 
@@ -2298,16 +2359,25 @@ function renderHUD(ctx) {
 
 function renderMinimap(ctx) {
   if (!dungeon) return;
-  const mmX = minimapExpanded ? GW/2 - 200 : GW - 150;
-  const mmY = minimapExpanded ? GH/2 - 150 : 50;
-  const mmW = minimapExpanded ? 400 : 135;
-  const mmH = minimapExpanded ? 300 : 105;
-  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  const mmX = minimapExpanded ? GW/2 - 300 : GW - 220;
+  const mmY = minimapExpanded ? GH/2 - 225 : 50;
+  const mmW = minimapExpanded ? 600 : 205;
+  const mmH = minimapExpanded ? 450 : 155;
+  // Background with border glow
+  ctx.fillStyle = 'rgba(0,0,0,0.8)';
   ctx.fillRect(mmX, mmY, mmW, mmH);
-  ctx.strokeStyle = '#334466';
+  ctx.strokeStyle = '#556688';
+  ctx.lineWidth = 2;
   ctx.strokeRect(mmX, mmY, mmW, mmH);
+  // Title
+  ctx.fillStyle = '#8899aa';
+  ctx.font = 'bold 11px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('地 图', mmX + mmW/2, mmY - 6);
+  ctx.textAlign = 'start';
 
   const cellW = mmW / GRID_COLS, cellH = mmH / GRID_ROWS;
+  const typeLabels = { start: '起点', combat: '战斗', chest: '宝箱', shop: '商店', boss: 'BOSS' };
   for (const room of dungeon.rooms) {
     const rx = mmX + room.gridX * cellW + 2;
     const ry = mmY + room.gridY * cellH + 2;
@@ -2316,11 +2386,38 @@ function renderMinimap(ctx) {
                       room.type === ROOM_TYPE.SHOP ? '#ffcc00' :
                       room.type === ROOM_TYPE.CHEST ? '#44ccff' : '#445566';
       ctx.fillRect(rx, ry, cellW - 4, cellH - 4);
+      // Room label text
+      if (cellW > 40) {
+        ctx.fillStyle = '#ffffff';
+        ctx.font = `${Math.floor(cellH*0.35)}px monospace`;
+        ctx.textAlign = 'center';
+        ctx.fillText(typeLabels[room.type] || '', rx + (cellW-4)/2, ry + (cellH-4)/2 + 5);
+        ctx.textAlign = 'start';
+      }
+    } else {
+      ctx.fillStyle = '#1a1a2e';
+      ctx.fillRect(rx, ry, cellW - 4, cellH - 4);
     }
     if (room.id === currentRoomIdx) {
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#00ff88';
+      ctx.lineWidth = 3;
       ctx.strokeRect(rx - 1, ry - 1, cellW - 2, cellH - 2);
+    }
+    // Show door connections between explored rooms
+    if (room.explored && cellW > 40) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+      ctx.lineWidth = 2;
+      for (const door of room.doors) {
+        const tr = getRoom(door.targetRoomId);
+        if (tr && tr.explored) {
+          ctx.beginPath();
+          ctx.moveTo(rx + (cellW-4)/2, ry + (cellH-4)/2);
+          const tx = mmX + tr.gridX * cellW + 2 + (cellW-4)/2;
+          const ty = mmY + tr.gridY * cellH + 2 + (cellH-4)/2;
+          ctx.lineTo(tx, ty);
+          ctx.stroke();
+        }
+      }
     }
   }
 }
@@ -2356,27 +2453,49 @@ function renderCharSelect(ctx) {
   ctx.font = 'bold 32px monospace';
   ctx.fillStyle = '#ffffff';
   ctx.textAlign = 'center';
-  ctx.fillText('选择角色', GW/2, 80);
+  ctx.fillText('选择角色', GW/2, 60);
   // 3 character cards
   const chars = Object.entries(CHARACTERS);
   chars.forEach(([key, data], i) => {
     const cx = GW/4 * (i+1);
-    const cy = 350;
+    const cy = 370;
+    const cardW = 170, cardH = 260;
     ctx.fillStyle = 'rgba(20,20,40,0.9)';
-    ctx.fillRect(cx-80, cy-70, 160, 180);
+    ctx.fillRect(cx-cardW/2, cy-cardH/2, cardW, cardH);
     ctx.strokeStyle = data.color;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(cx-80, cy-70, 160, 180);
-    ctx.font = '40px monospace';
-    ctx.fillText(data.emoji, cx, cy-30);
-    ctx.font = 'bold 18px monospace';
+    ctx.lineWidth = 2.5;
+    ctx.strokeRect(cx-cardW/2, cy-cardH/2, cardW, cardH);
+    // Emoji
+    ctx.font = '48px monospace';
+    ctx.fillText(data.emoji, cx, cy-95);
+    // Name
+    ctx.font = 'bold 20px monospace';
     ctx.fillStyle = data.color;
-    ctx.fillText(data.name, cx, cy+10);
+    ctx.fillText(data.name, cx, cy-55);
+    // Stats
     ctx.font = '13px monospace';
+    ctx.fillStyle = '#ff8888';
+    ctx.fillText('❤️ x' + data.hp, cx-45, cy-30);
+    ctx.fillStyle = '#88ccff';
+    ctx.fillText('🏃 ' + data.speed, cx+45, cy-30);
+    // Starting weapon
+    const sw = WEAPONS[data.startWeapon];
+    ctx.fillStyle = '#ffdd00';
+    ctx.fillText('初始武器: ' + sw.emoji + sw.name, cx, cy-8);
+    // Skill
+    ctx.fillStyle = '#aaccff';
+    ctx.fillText('技能: ' + data.skillName + ' (CD' + data.skillCD + 's)', cx, cy+14);
+    // Passive
+    ctx.fillStyle = '#88ff88';
+    ctx.fillText('🎯 ' + data.passive.name + ': ' + data.passive.desc, cx, cy+40);
+    // Description
+    ctx.font = '12px monospace';
     ctx.fillStyle = '#888888';
-    ctx.fillText('❤️ x' + data.hp, cx, cy+35);
-    ctx.fillText('技能: ' + data.skillName, cx, cy+55);
-    ctx.fillText(data.description, cx, cy+75);
+    ctx.fillText(data.description, cx, cy+65);
+    // Click hint
+    ctx.fillStyle = data.color;
+    ctx.font = 'bold 13px monospace';
+    ctx.fillText('[ 点击选择 ]', cx, cy+90);
   });
   ctx.textAlign = 'start';
 }
