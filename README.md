@@ -1,99 +1,128 @@
-# 🎮 Neon Abyss — 霓虹深渊
+# 🎮 像素骑士 — Pixel Knight
 
-> 赛博朋克 Boss Rush 射击游戏 | 纯 HTML/JS | 零依赖 | 开源免费
+> 元气骑士风格 · 地牢探索射击 · 纯 HTML5 Canvas | 零依赖 | 开源免费 | 浏览器即开即玩
 
-## 🚀 快速部署到 GitHub Pages（免费）
+## 🚀 快速开始
 
-### 第 1 步：创建 GitHub 仓库
+### 在线游玩
+🌐 **直接打开玩：** [https://frank-sns.github.io/pixel-knight/landing.html](https://frank-sns.github.io/pixel-knight/landing.html)
 
-1. 登录 [GitHub](https://github.com)（没有账号的话免费注册一个）
-2. 点击右上角 **+** → **New repository**
-3. 仓库名填写：`neon-abyss`（或任意名字）
-4. 选择 **Public**（公开）
-5. 点击 **Create repository**
+或直接打开游戏本体：[pixel_knight.html](pixel_knight.html)
 
-### 第 2 步：上传文件
-
-**方法 A — 网页上传（最简单）：**
-1. 在仓库页面点击 **uploading an existing file**
-2. 把这两个文件拖进去：
-   - `index.html`（首页/宣传页）
-   - `rhythm_jumper.html`（游戏本体）
-3. 点击 **Commit changes**
-
-**方法 B — 命令行（推荐）：**
+### 本地运行
 ```bash
-git init
-git add index.html rhythm_jumper.html README.md
-git commit -m "Initial release: Neon Abyss"
-git branch -M main
-git remote add origin https://github.com/你的用户名/neon-abyss.git
-git push -u origin main
+# 下载仓库
+git clone https://github.com/Frank-sns/pixel-knight.git
+
+# 直接用浏览器打开
+open pixel_knight.html        # macOS
+start pixel_knight.html       # Windows
+xdg-open pixel_knight.html    # Linux
 ```
 
-### 第 3 步：开启 GitHub Pages
+---
 
-1. 进入仓库 **Settings** → **Pages**
-2. **Source** 选择 `Deploy from a branch`
-3. **Branch** 选择 `main`，文件夹选 `/ (root)`
-4. 点击 **Save**
-5. 等待 30-60 秒，页面会显示你的网址：
-   ```
-   https://你的用户名.github.io/neon-abyss/
-   ```
+## 🎯 游戏特色
 
-### 第 4 步：分享赚钱！
+| 特性 | 详情 |
+|------|------|
+| 👥 **3大角色** | 骑士（散弹+坦克）、法师（法杖+控场）、刺客（冲锋枪+爆发） |
+| 🔫 **56种武器组合** | 8种基础武器 × 7种随机词缀 |
+| 👾 **10种敌人** | 3层递进，各自独特的AI行为 |
+| 👑 **7大Boss** | 多阶段战斗，每局随机5场+最终Boss |
+| 🗺️ **随机地牢** | 4×3网格程序生成，3层难度递增 |
+| 💰 **经济系统** | 金币收集 → 商店购物 → Boss掉落Buff |
+| 🔊 **合成音效** | Web Audio API OscillatorNode合成，零音频文件 |
 
-把链接发给朋友、发到社交媒体、游戏论坛！
+---
 
-## 💰 如何变现
-
-### 1. 赞赏码（已在首页预留位置）
-- 替换 `index.html` 中 `qr-placeholder` 的微信/支付宝赞赏码图片
-- 将二维码图片放到仓库中，然后修改 HTML 中的 `<img>` 标签
-
-### 2. Buy Me a Coffee
-- 访问 [buymeacoffee.com](https://www.buymeacoffee.com/) 注册
-- 将首页中的链接替换为你的个人链接
-
-### 3. Google AdSense（进阶）
-- 在 `rhythm_jumper.html` 的 `<head>` 中添加 AdSense 代码
-- 广告收入按展示和点击计算
-- 需要网站有一定流量后才能申请
-
-### 4. 自定义域名
-- 购买域名（如 `neon-abyss.com`）
-- 在 GitHub Pages Settings 中配置 Custom Domain
-- 在域名提供商处添加 CNAME 记录指向 `你的用户名.github.io`
-
-## 🎯 游戏玩法
+## 🕹️ 操作指南
 
 | 按键 | 操作 |
 |------|------|
-| Space / ↑ | 跳跃 / 二段跳 |
-| M | 发射弹幕（消耗能量） |
+| W A S D | 移动角色 |
+| 鼠标移动 | 瞄准方向 |
+| 鼠标左键 | 射击 |
+| Space | 释放技能 |
+| E | 拾取物品 / 开门 |
+| 1 / 2 | 切换武器 |
+| Tab | 展开/收起大地图 |
+| Esc | 暂停 |
 
-- 击败 5 种 Boss，获取永久 Buff
-- 打爆能量方块获取能量
-- 拾取能量球升级武器
-- 3 条命，捡血包回血
+---
 
-## 📁 文件说明
+## 🎨 角色介绍
+
+### ⚔️ 骑士 — 均衡战士
+- **被动「坚韧」**：伤害+10%，生命上限+1
+- **技能「冲锋斩」**：向前冲刺斩击 (CD10s)
+- **初始武器**：散弹枪 — 扇形5发散射，近距爆发
+
+### 🔮 法师 — 控场专家
+- **被动「奥术」**：射速+25%，技能CD-2s
+- **技能「冰霜新星」**：冻结周围敌人2秒 (CD6s)
+- **初始武器**：法杖 — 能量球墙壁弹射
+
+### 🗡️ 刺客 — 高速刺客
+- **被动「疾影」**：移速+20%，暴击率+15%
+- **技能「暗影步」**：隐身3秒+下次攻击×3 (CD12s)
+- **初始武器**：冲锋枪 — 弹幕压制，极快射速
+
+---
+
+## 🔫 武器词缀
+
+武器掉落时 60% 概率附带随机词缀：
+
+| 词缀 | 效果 | 子弹颜色 |
+|------|------|----------|
+| 🔥 火焰 | 3秒灼烧持续伤害 | 橙红 |
+| ❄️ 冰霜 | 减速敌人40%，持续2秒 | 淡蓝 |
+| ⚡ 雷电 | 击杀后弹跳至2个附近敌人 | 金黄 |
+| ☠️ 剧毒 | 叠3层爆发大伤害 | 翠绿 |
+| 💀 吸血 | 击杀回复0.5生命 | 暗紫 |
+| 💥 爆炸 | 命中后小范围AoE | 亮红 |
+| 💨 击退 | 击退敌人 | 白色 |
+
+---
+
+## 🗺️ 地牢结构
 
 ```
-index.html            ← 酷炫宣传首页
-rhythm_jumper.html    ← 游戏本体（单文件，浏览器直接打开）
-README.md             ← 本文件
+第 1 层「地牢入口」→ 4-6个房间 + 1个Boss
+第 2 层「地下洞穴」→ 6-8个房间 + 2个Boss（连续战斗）
+第 3 层「深渊神殿」→ 7-9个房间 + 2个Boss + 最终暗影领主
 ```
+
+- 房间类型：战斗房、宝箱房、商店、Boss房
+- 击败Boss获得永久Buff（生命上限/伤害/射速/移速/穿透）
+- 右上角小地图显示已探索区域
+
+---
+
+## 💰 支持作者
+
+如果觉得好玩，欢迎赞赏支持：
+
+<p align="center">
+  <img src="wechat.jpg" width="220" alt="微信赞赏码">
+  <img src="alipay.jpg" width="220" alt="支付宝收款码">
+</p>
+
+---
 
 ## 🛠️ 技术栈
 
 - 纯 HTML + CSS + JavaScript
 - Canvas 2D API 渲染
-- Web Audio API 音效
-- 零外部依赖，浏览器即开即玩
-- 兼容所有现代浏览器（Chrome/Firefox/Edge/Safari）
+- Web Audio API 合成音效
+- 零外部依赖，单文件即开即玩
+- 兼容所有现代浏览器（Chrome / Edge / Firefox / Safari）
+
+---
 
 ## 📝 License
 
-MIT — 随意使用、修改、商用。如果能保留作者署名就更好了 ❤️
+MIT — 随意使用、修改、商用。保留作者署名。
+
+灵感来自 [凉屋游戏 · 元气骑士 (Soul Knight)](https://www.chillyroom.com/)
