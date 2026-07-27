@@ -134,17 +134,19 @@ const BOSS_BUFFS = [
 
 // === TUNING ===
 const TUNING = {
-  enemyHpScale: [1.0, 1.4, 2.0],       // per floor
-  enemyDmgScale: [1.0, 1.3, 1.8],
-  bossHpScale: [1.0, 1.4, 2.0],
-  dropChanceWeapon: 0.35,
-  dropChanceHeart: 0.25,
-  dropChanceCoin: 0.40,
-  coinDropMin: 1, coinDropMax: 3,
-  shopHeartPrice: 8,
-  shopWeaponPrice: 25,
-  shopEnchantedPrice: 50,
-  shopEnergyPrice: 12,
+  enemyHpScale: [0.8, 1.1, 1.4],       // per floor — gentler scaling
+  enemyDmgScale: [0.8, 1.0, 1.2],
+  bossHpScale: [0.9, 1.1, 1.4],
+  dropChanceWeapon: 0.45,
+  dropChanceHeart: 0.40,
+  dropChanceCoin: 0.55,
+  coinDropMin: 2, coinDropMax: 5,
+  shopHeartPrice: 5,
+  shopWeaponPrice: 18,
+  shopEnchantedPrice: 35,
+  shopEnergyPrice: 6,
+  // Room entry protection
+  roomEntryDelay: 1.8,  // seconds of invincibility + enemy freeze on room entry
 };
 
 // === BULLETS ===
@@ -157,6 +159,7 @@ let particles = [];
 let boss = null;
 let bossBullets = [];
 let bossClones = [];        // shadow_lord clones
+let roomEntryTimer = 0;     // grace period on room entry (seconds remaining)
 let tentacleZones = [];    // vine_behemoth tentacles
 let sporeZones = [];       // vine_behemoth spores
 let lightningPillars = []; // thunder_lord pillars
@@ -828,8 +831,8 @@ function createEnemy(type, x, y) {
         ctx.fillStyle = '#00ff00';
         ctx.fillRect(-10, -this.radius-8, 20*(this.hp/this.maxHp), 3);
       }
-      // Frozen visual
-      if (this.state.frozen) {
+      // Frozen visual (skill freeze or room entry protection)
+      if (this.state.frozen || this.frozen) {
         ctx.strokeStyle = '#88ccff';
         ctx.lineWidth = 2;
         ctx.beginPath();
@@ -1463,7 +1466,11 @@ function enterRoom(roomId) {
   // Spawn player at center
   player.x = room.cx;
   player.y = room.cy;
-  // If combat room and not cleared, spawn enemies
+  // Room entry protection: brief invincibility + enemy freeze
+  roomEntryTimer = TUNING.roomEntryDelay;
+  player.invincible = TUNING.roomEntryDelay;
+  showMessage('进入房间 — ' + TUNING.roomEntryDelay + '秒保护!', TUNING.roomEntryDelay * 1000);
+  // If combat room and not cleared, spawn enemies with delay
   if (room.type === ROOM_TYPE.COMBAT && !room.cleared) {
     spawnRoomEnemies(room);
   }
@@ -1489,12 +1496,17 @@ function enterRoom(roomId) {
 
 function spawnRoomEnemies(room) {
   enemies = enemies.filter(e => e.alive);
-  const count = 5 + Math.floor(Math.random() * 5) + dungeon.floorNum * 2; // more enemies for larger rooms
+  const count = 3 + Math.floor(Math.random() * 4) + dungeon.floorNum; // scaled back for fairness
   const validTypes = Object.keys(ENEMY_DATA).filter(t => ENEMY_DATA[t].floor <= dungeon.floorNum);
   for (let i = 0; i < count; i++) {
     const type = validTypes[randInt(0, validTypes.length - 1)];
-    const ex = room.x + 40 + Math.random() * (room.w - 80);
-    const ey = room.y + 40 + Math.random() * (room.h - 80);
+    // Spawn away from player (min 180px distance)
+    let ex, ey, tries = 0;
+    do {
+      ex = room.x + 60 + Math.random() * (room.w - 120);
+      ey = room.y + 60 + Math.random() * (room.h - 120);
+      tries++;
+    } while (tries < 30 && Math.sqrt((ex-player.x)**2 + (ey-player.y)**2) < 180);
     const e = createEnemy(type, ex, ey);
     if (e) enemies.push(e);
   }
@@ -2264,8 +2276,19 @@ function update(dt) {
     if (!boss.alive) { onBossDefeated(); }
   }
 
+  // Room entry protection timer
+  if (roomEntryTimer > 0) {
+    roomEntryTimer -= dt;
+    // Freeze enemies during protection — they can't move or attack
+    if (roomEntryTimer > 0) {
+      enemies.forEach(e => { e.frozen = true; });
+    } else {
+      enemies.forEach(e => { e.frozen = false; });
+    }
+  }
+
   // Enemy update
-  enemies.forEach(e => e.update(dt));
+  enemies.forEach(e => { if (!e.frozen) e.update(dt); });
   enemies = enemies.filter(e => e.alive);
   updateEnemyBullets(dt);
   // Collisions
@@ -2589,6 +2612,20 @@ function render() {
   renderHUD(ctx);
   renderMinimap(ctx);
 
+  // Room entry protection overlay
+  if (roomEntryTimer > 0) {
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.fillRect(0, 0, GW, GH);
+    ctx.fillStyle = '#88ccff';
+    ctx.font = 'bold 28px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('🛡️ 房间保护: ' + roomEntryTimer.toFixed(1) + 's', GW/2, GH/2 + 40);
+    ctx.font = '16px monospace';
+    ctx.fillStyle = '#aaddff';
+    ctx.fillText('敌人已冻结 · 准备迎战!', GW/2, GH/2 + 80);
+    ctx.textAlign = 'start';
+  }
+
   // Boss HP bar (top-center)
   if (boss && boss.alive && gameState === STATE.BOSS) {
     const barW = 300, barH = 16, barX = GW/2 - barW/2, barY = 12;
@@ -2718,6 +2755,7 @@ function initGame() {
   stoneWalls = [];
   boss = null;
   bossQueue = [];
+  roomEntryTimer = 0;
   dungeon = generateFloor(1);
   currentRoomIdx = dungeon.startRoomId;
   gameState = STATE.PLAYING;
