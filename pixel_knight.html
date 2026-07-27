@@ -161,6 +161,7 @@ let tentacleZones = [];    // vine_behemoth tentacles
 let sporeZones = [];       // vine_behemoth spores
 let lightningPillars = []; // thunder_lord pillars
 let stoneWalls = [];       // ancient_golem walls
+let bossQueue = [];        // consecutive boss fight queue
 
 // === ROOM BOUNDS (world coords for player clamping) ===
 let roomBounds = { x: 0, y: 0, w: 100, h: 100 };
@@ -178,6 +179,73 @@ let prePauseState = null;
 
 function spawnBullet(x, y, angle, wType, affixKey) {
   const wData = WEAPONS[wType];
+
+  // Melee attack — instant hit check in an arc in front of player
+  if (wData.type === 'melee') {
+    const meleeRange = 40;
+    const meleeAngle = Math.PI;
+    for (const enemy of enemies) {
+      if (!enemy.alive) continue;
+      const dx = enemy.x - x, dy = enemy.y - y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      const hitAngle = Math.atan2(dy, dx);
+      let angleDiff = hitAngle - angle;
+      while (angleDiff > Math.PI) angleDiff -= Math.PI*2;
+      while (angleDiff < -Math.PI) angleDiff += Math.PI*2;
+      if (dist < meleeRange && Math.abs(angleDiff) < meleeAngle/2) {
+        enemy.takeDamage(wData.damage * player.buffs.damageMult);
+        // Apply affix on melee hit
+        if (affixKey) {
+          switch (affixKey) {
+            case 'fire': enemy.state.burning = { timer: 3.0, dps: 3 }; break;
+            case 'ice': enemy.state.slowed = { timer: 2.0, factor: 0.4 }; break;
+            case 'poison':
+              enemy.state.poisonStacks = (enemy.state.poisonStacks || 0) + 1;
+              if (enemy.state.poisonStacks >= 3) { enemy.takeDamage(15); enemy.state.poisonStacks = 0; spawnParticles(enemy.x, enemy.y, '#44ff44', 6); }
+              break;
+            case 'explosive':
+              for (const e2 of enemies) {
+                if (e2 !== enemy && e2.alive) {
+                  const dx2 = enemy.x - e2.x, dy2 = enemy.y - e2.y;
+                  if (Math.sqrt(dx2*dx2+dy2*dy2) < 60) e2.takeDamage(wData.damage * player.buffs.damageMult * 0.5);
+                }
+              }
+              spawnParticles(enemy.x, enemy.y, '#ff4400', 8);
+              break;
+            case 'knockback':
+              const kdx = enemy.x - x, kdy = enemy.y - y;
+              const kdist = Math.sqrt(kdx*kdx+kdy*kdy) || 1;
+              enemy.x += (kdx/kdist) * 60;
+              enemy.y += (kdy/kdist) * 60;
+              break;
+            case 'lightning': enemy.state.lightningMark = true; break;
+            case 'lifesteal': player.hp = Math.min(player.maxHp, player.hp + 0.5); break;
+          }
+        }
+      }
+    }
+    // Also destroy nearby enemy bullets
+    for (let i = enemyBullets.length - 1; i >= 0; i--) {
+      const eb = enemyBullets[i];
+      const dx = eb.x - x, dy = eb.y - y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist < meleeRange) enemyBullets.splice(i, 1);
+    }
+    // Hit boss if in range
+    if (boss && boss.alive) {
+      const bdx = boss.x - x, bdy = boss.y - y;
+      if (Math.sqrt(bdx*bdx + bdy*bdy) < meleeRange + boss.radius) {
+        boss.takeDamage(wData.damage * player.buffs.damageMult);
+      }
+    }
+    // Visual: spawn arc particles
+    for (let i = 0; i < 8; i++) {
+      const pa = angle - meleeAngle/2 + (i/7) * meleeAngle;
+      particles.push({x: x + Math.cos(pa)*meleeRange, y: y + Math.sin(pa)*meleeRange, vx:0, vy:0, life:0.2, maxLife:0.2, color:'#ffffff', radius:3});
+    }
+    return; // Don't create a bullet
+  }
+
   const count = wData.count || 1;
   for (let i = 0; i < count; i++) {
     const spreadAngle = angle + (Math.random() - 0.5) * wData.spread * 2;
@@ -543,16 +611,52 @@ function createEnemy(type, x, y) {
         this.state.frozenTimer -= dt;
         if (this.state.frozenTimer <= 0) { this.state.frozen = false; this.state.frozenTimer = 0; }
       }
+      // Burning DoT (from fire affix)
+      if (this.state.burning) {
+        this.state.burning.timer -= dt;
+        this.hp -= this.state.burning.dps * dt;
+        if (this.state.burning.timer <= 0) this.state.burning = null;
+        if (this.hp <= 0 && this.alive) {
+          this.alive = false;
+          player.coins += this.coins;
+          if (player.buffs.lifesteal > 0) player.hp = Math.min(player.maxHp, player.hp + 0.5);
+          // Lightning chain on death
+          if (this.state.lightningMark) {
+            const chainTargets = enemies
+              .filter(e => e.alive && e !== this)
+              .sort((a, b) => {
+                const da = (a.x-this.x)*(a.x-this.x) + (a.y-this.y)*(a.y-this.y);
+                const db = (b.x-this.x)*(b.x-this.x) + (b.y-this.y)*(b.y-this.y);
+                return da - db;
+              })
+              .slice(0, 2);
+            for (const ct of chainTargets) {
+              ct.takeDamage(10);
+              spawnParticles(ct.x, ct.y, '#ffdd00', 5);
+            }
+          }
+          spawnParticles(this.x, this.y, this.color, 8);
+          SFX.enemyDeath();
+        }
+      }
+      // Slowed state (from ice affix)
+      if (this.state.slowed) {
+        this.state.slowed.timer -= dt;
+        if (this.state.slowed.timer <= 0) this.state.slowed = null;
+      }
       this.fireTimer -= dt;
       this.flashTimer = Math.max(0, this.flashTimer - dt);
-      const frozenSlow = this.state.frozen ? 0.15 : 1;
+      let slowMult = 1;
+      if (this.state.frozen) slowMult = 0.15;
+      else if (this.state.slowed) slowMult = 1 - this.state.slowed.factor;
       const dx = player.x - this.x;
       const dy = player.y - this.y;
       const dist = Math.sqrt(dx*dx + dy*dy) || 1;
       this.angle = Math.atan2(dy, dx);
 
       const origSpeed = this.speed;
-      if (this.state.frozen) this.speed *= 0.15; // frozen slows movement to 15%
+      if (this.state.frozen) this.speed *= 0.15;
+      else if (this.state.slowed) this.speed *= (1 - this.state.slowed.factor);
 
       switch (this.behavior) {
         case 'chase':
@@ -595,7 +699,7 @@ function createEnemy(type, x, y) {
           if (dist < 300) {
             if (!this.state.dashing) { this.state.dashAngle = this.angle; this.state.dashTimer = 0; this.state.dashing = true; }
             this.state.dashTimer += dt;
-            const dashSpd = 400 * frozenSlow;
+            const dashSpd = 400 * slowMult;
             this.x += Math.cos(this.state.dashAngle) * dashSpd * dt;
             this.y += Math.sin(this.state.dashAngle) * dashSpd * dt;
             if (this.state.dashTimer > 1.0) { this.state.dashing = false; this.state.dashTimer = 0; }
@@ -616,7 +720,23 @@ function createEnemy(type, x, y) {
     takeDamage(amount) {
       this.hp -= amount;
       this.flashTimer = 0.1;
-      if (this.hp <= 0) { this.alive = false; player.coins += this.coins; if (player.buffs.lifesteal > 0) { player.hp = Math.min(player.maxHp, player.hp + 0.5); } spawnParticles(this.x, this.y, this.color, 8); SFX.enemyDeath(); }
+      if (this.hp <= 0) { this.alive = false; player.coins += this.coins; if (player.buffs.lifesteal > 0) { player.hp = Math.min(player.maxHp, player.hp + 0.5); }
+        // Lightning chain on death
+        if (this.state.lightningMark) {
+          const chainTargets = enemies
+            .filter(e => e.alive && e !== this)
+            .sort((a, b) => {
+              const da = (a.x-this.x)*(a.x-this.x) + (a.y-this.y)*(a.y-this.y);
+              const db = (b.x-this.x)*(b.x-this.x) + (b.y-this.y)*(b.y-this.y);
+              return da - db;
+            })
+            .slice(0, 2);
+          for (const ct of chainTargets) {
+            ct.takeDamage(10);
+            spawnParticles(ct.x, ct.y, '#ffdd00', 5);
+          }
+        }
+        spawnParticles(this.x, this.y, this.color, 8); SFX.enemyDeath(); }
     },
 
     explode() {
@@ -1033,9 +1153,29 @@ function startBossFight(bossType) {
 
 function onBossDefeated() {
   const room = getCurrentRoom();
-  room.cleared = true;
   const defeatedBossType = boss.type;
   const isFinalBoss = (defeatedBossType === 'shadow_lord');
+
+  // Clean up boss state
+  boss = null;
+  bossBullets = [];
+  bossClones = [];
+  tentacleZones = [];
+  sporeZones = [];
+  lightningPillars = [];
+  stoneWalls = [];
+
+  SFX.bossExplosion();
+
+  // If more bosses in queue, start next one consecutively
+  if (bossQueue.length > 0) {
+    showMessage('下一个 Boss 即将出现!', 2000);
+    startBossFight(bossQueue.shift());
+    return;
+  }
+
+  // All bosses on this floor defeated — give rewards
+  room.cleared = true;
 
   // Drop buff based on floor (non-final bosses only)
   if (!isFinalBoss) {
@@ -1051,17 +1191,6 @@ function onBossDefeated() {
   if (room) spawnRandomWeapon(room.cx, room.cy);
   // Drop health
   if (room) spawnDrop(room.cx - 30, room.cy, 'heart');
-
-  // Clean up boss state
-  boss = null;
-  bossBullets = [];
-  bossClones = [];
-  tentacleZones = [];
-  sporeZones = [];
-  lightningPillars = [];
-  stoneWalls = [];
-
-  SFX.bossExplosion();
 
   if (isFinalBoss) {
     gameState = STATE.VICTORY;
@@ -1280,16 +1409,23 @@ function enterRoom(roomId) {
   if (room.type === ROOM_TYPE.COMBAT && !room.cleared) {
     spawnRoomEnemies(room);
   }
-  // Boss room — start boss fight
+  // Boss room — start boss fight(s) per floor
   if (room.type === ROOM_TYPE.BOSS && !room.cleared) {
-    let bossType;
-    if (dungeon.floorNum >= 3) {
-      bossType = 'shadow_lord'; // Final boss on floor 3
+    bossQueue = [];
+    if (dungeon.floorNum === 1) {
+      const floor1Bosses = Object.keys(BOSS_DATA).filter(k => BOSS_DATA[k].floor === 1);
+      bossQueue.push(floor1Bosses[randInt(0, floor1Bosses.length - 1)]);
+    } else if (dungeon.floorNum === 2) {
+      const floor2Bosses = Object.keys(BOSS_DATA).filter(k => BOSS_DATA[k].floor === 2);
+      const shuffled = [...floor2Bosses].sort(() => Math.random() - 0.5);
+      bossQueue.push(shuffled[0], shuffled[1]);
     } else {
-      const floorBosses = Object.keys(BOSS_DATA).filter(k => BOSS_DATA[k].floor === dungeon.floorNum);
-      bossType = floorBosses[randInt(0, floorBosses.length - 1)];
+      // Floor 3: 2 random + fixed shadow_lord
+      const floor3Bosses = Object.keys(BOSS_DATA).filter(k => BOSS_DATA[k].floor === 3 && k !== 'shadow_lord');
+      const shuffled = [...floor3Bosses].sort(() => Math.random() - 0.5);
+      bossQueue.push(shuffled[0], shuffled[1], 'shadow_lord');
     }
-    startBossFight(bossType);
+    startBossFight(bossQueue.shift());
   }
 }
 
@@ -1342,6 +1478,46 @@ function checkBulletEnemyCollisions() {
           if (Math.abs(angleDiff) < Math.PI/2.5) continue;
         }
         enemy.takeDamage(b.damage);
+        // Apply affix effect on hit
+        if (b.affix) {
+          switch (b.affix) {
+            case 'fire':
+              enemy.state.burning = { timer: 3.0, dps: 3 };
+              break;
+            case 'ice':
+              enemy.state.slowed = { timer: 2.0, factor: 0.4 };
+              break;
+            case 'poison':
+              enemy.state.poisonStacks = (enemy.state.poisonStacks || 0) + 1;
+              if (enemy.state.poisonStacks >= 3) {
+                enemy.takeDamage(15);
+                enemy.state.poisonStacks = 0;
+                spawnParticles(enemy.x, enemy.y, '#44ff44', 6);
+              }
+              break;
+            case 'explosive':
+              for (const e2 of enemies) {
+                if (e2 !== enemy && e2.alive) {
+                  const dx2 = enemy.x - e2.x, dy2 = enemy.y - e2.y;
+                  if (Math.sqrt(dx2*dx2+dy2*dy2) < 60) e2.takeDamage(b.damage * 0.5);
+                }
+              }
+              spawnParticles(enemy.x, enemy.y, '#ff4400', 8);
+              break;
+            case 'knockback':
+              const kdx = enemy.x - player.x, kdy = enemy.y - player.y;
+              const kdist = Math.sqrt(kdx*kdx+kdy*kdy) || 1;
+              enemy.x += (kdx/kdist) * 60;
+              enemy.y += (kdy/kdist) * 60;
+              break;
+            case 'lightning':
+              enemy.state.lightningMark = true;
+              break;
+            case 'lifesteal':
+              player.hp = Math.min(player.maxHp, player.hp + 0.5);
+              break;
+          }
+        }
         SFX.hit();
         if (b.pierce <= 0) { bullets.splice(bi, 1); break; }
         else b.pierce--;
@@ -2065,6 +2241,7 @@ function update(dt) {
     sporeZones = [];
     lightningPillars = [];
     stoneWalls = [];
+    bossQueue = [];
   }
 
   camera.update(dt);
@@ -2421,6 +2598,7 @@ function initGame() {
   lightningPillars = [];
   stoneWalls = [];
   boss = null;
+  bossQueue = [];
   dungeon = generateFloor(1);
   currentRoomIdx = dungeon.startRoomId;
   gameState = STATE.PLAYING;
