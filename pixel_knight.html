@@ -838,6 +838,12 @@ function createEnemy(type, x, y) {
           break;
       }
       this.speed = origSpeed;
+      // Clamp to room bounds — prevent enemies escaping the room
+      if (roomBounds) {
+        const margin = this.radius + 4;
+        this.x = Math.max(roomBounds.x - margin, Math.min(roomBounds.x + roomBounds.w + margin, this.x));
+        this.y = Math.max(roomBounds.y - margin, Math.min(roomBounds.y + roomBounds.h + margin, this.y));
+      }
     },
 
     takeDamage(amount) {
@@ -2482,6 +2488,17 @@ function update(dt) {
 
   // Enemy update
   enemies.forEach(e => { if (!e.frozen) e.update(dt); });
+  // Failsafe: force enemies back inside room if they somehow escaped
+  if (roomBounds) {
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      if (e.x < roomBounds.x - 60 || e.x > roomBounds.x + roomBounds.w + 60 ||
+          e.y < roomBounds.y - 60 || e.y > roomBounds.y + roomBounds.h + 60) {
+        e.x = roomBounds.x + roomBounds.w / 2;
+        e.y = roomBounds.y + roomBounds.h / 2;
+      }
+    }
+  }
   enemies = enemies.filter(e => e.alive);
   updateEnemyBullets(dt);
   // Collisions
