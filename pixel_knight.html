@@ -309,6 +309,10 @@ canvas.addEventListener('mousemove', e => {
 canvas.addEventListener('mousedown', e => { if (e.button === 0) mouse.down = true; });
 canvas.addEventListener('mouseup', e => { if (e.button === 0) mouse.down = false; });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  cycleWeapon(e.deltaY > 0 ? 1 : -1);
+});
 canvas.addEventListener('click', e => {
   const rect = canvas.getBoundingClientRect();
   const scaleX = GW / rect.width;
@@ -932,7 +936,15 @@ function switchWeapon(slot) {
   if (slot >= 0 && slot < player.weapons.length) {
     player.currentWeapon = slot;
     player.fireTimer = 0;
+    player.chargeTimer = 0;
   }
+}
+function cycleWeapon(direction) {
+  // direction: 1 = next, -1 = prev
+  if (player.weapons.length === 0) return;
+  player.currentWeapon = (player.currentWeapon + direction + player.weapons.length) % player.weapons.length;
+  player.fireTimer = 0;
+  player.chargeTimer = 0;
 }
 
 // === BOSS SYSTEM ===
@@ -1880,14 +1892,10 @@ function pickupItem(item) {
       player.skillTimer = Math.max(0, player.skillTimer - player.skillCooldown * 0.5);
       break;
     case 'weapon':
-      if (player.weapons.length < 2) {
-        player.weapons.push({ type: item.weaponType, affix: item.affix });
-      } else {
-        player.weapons[player.currentWeapon] = { type: item.weaponType, affix: item.affix };
-      }
+      player.weapons.push({ type: item.weaponType, affix: item.affix });
       const wInfo = WEAPONS[item.weaponType];
       const label = (item.affix ? '[' + AFFIXES[item.affix].name + ']' : '') + wInfo.name;
-      showMessage('拾取武器: ' + label, 3000);
+      showMessage('拾取: ' + label + ' (共' + player.weapons.length + '把)', 3000);
       break;
   }
 }
@@ -1912,11 +1920,7 @@ function buyShopItem(index) {
       player.hp = Math.min(player.maxHp, player.hp + 1);
       break;
     case 'weapon':
-      if (player.weapons.length < 2) {
-        player.weapons.push({ type: item.weaponType, affix: item.affix });
-      } else {
-        player.weapons[player.currentWeapon] = { type: item.weaponType, affix: item.affix };
-      }
+      player.weapons.push({ type: item.weaponType, affix: item.affix });
       break;
     case 'energy':
       player.skillTimer = 0;
@@ -2374,10 +2378,8 @@ function update(dt) {
     if (drops[i].life <= 0) drops.splice(i, 1);
   }
 
-  // Weapon switch keys (only when playing)
+  // Skill key (weapon switching now via mouse scroll wheel)
   if (gameState === STATE.PLAYING || gameState === STATE.BOSS) {
-    if (keys['Digit1']) { keys['Digit1'] = false; switchWeapon(0); }
-    if (keys['Digit2']) { keys['Digit2'] = false; switchWeapon(1); }
     if (keys['Space']) { keys['Space'] = false; player.activateSkill(); }
   }
 
@@ -2592,29 +2594,68 @@ function renderHUD(ctx) {
   ctx.fillStyle = '#aaccff';
   ctx.fillText('第' + (dungeon?.floorNum || '?') + '层', GW - 150, 30);
 
-  // Bottom bar
-  ctx.fillStyle = 'rgba(0,0,0,0.6)';
-  ctx.fillRect(0, GH - 60, GW, 60);
+  // Bottom bar — weapon inventory scroll
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, GH - 70, GW, 70);
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, GH - 70); ctx.lineTo(GW, GH - 70); ctx.stroke();
 
-  // Current weapon
-  const wp = player.getWeapon();
-  if (wp) {
-    const wData = WEAPONS[wp.type];
-    const affixName = wp.affix ? AFFIXES[wp.affix].name : '';
-    ctx.fillStyle = wp.affix ? AFFIXES[wp.affix].color : '#ffffff';
-    ctx.fillText('[1] ' + affixName + wData.name + ' ' + wData.emoji, 16, GH - 30);
-  }
-  // Other weapon
-  if (player.weapons.length > 1) {
-    const otherIdx = player.currentWeapon === 0 ? 1 : 0;
-    const wp2 = player.weapons[otherIdx];
-    const wData2 = WEAPONS[wp2.type];
-    const affixName2 = wp2.affix ? AFFIXES[wp2.affix].name : '';
-    const slotLabel = otherIdx === 0 ? '[1]' : '[2]';
-    ctx.fillText(slotLabel + ' ' + affixName2 + wData2.name + ' ' + wData2.emoji, 16, GH - 10);
+  // Scroll hint
+  ctx.fillStyle = '#555555';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText('🖱️ 滚轮切换武器 (' + player.weapons.length + '把)', GW - 10, GH - 58);
+  ctx.textAlign = 'start';
+
+  // Weapon slots in a row
+  const slotW = 110, slotH = 52, startX = 8, slotY = GH - 62;
+  const maxVisible = Math.floor((GW - 40) / slotW);
+  // Center current weapon in view
+  let scrollOffset = Math.max(0, player.currentWeapon - Math.floor(maxVisible / 2));
+  scrollOffset = Math.min(scrollOffset, Math.max(0, player.weapons.length - maxVisible));
+
+  for (let i = scrollOffset; i < Math.min(scrollOffset + maxVisible, player.weapons.length); i++) {
+    const wx = startX + (i - scrollOffset) * slotW;
+    const wpSlot = player.weapons[i];
+    if (!wpSlot) continue;
+    const wData2 = WEAPONS[wpSlot.type];
+    if (!wData2) continue;
+    const affixName2 = wpSlot.affix ? AFFIXES[wpSlot.affix].name : '';
+
+    // Slot background
+    const isCurrent = (i === player.currentWeapon);
+    ctx.fillStyle = isCurrent ? 'rgba(255,204,0,0.2)' : 'rgba(255,255,255,0.05)';
+    ctx.fillRect(wx, slotY, slotW - 2, slotH);
+    if (isCurrent) {
+      ctx.strokeStyle = '#ffcc00';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(wx, slotY, slotW - 2, slotH);
+    }
+
+    // Emoji
+    ctx.font = '16px monospace';
+    ctx.fillStyle = wpSlot.affix ? AFFIXES[wpSlot.affix].color : wData2.color;
+    ctx.fillText(wData2.emoji, wx + 6, slotY + 18);
+
+    // Weapon name
+    ctx.font = 'bold 10px monospace';
+    ctx.fillStyle = isCurrent ? '#ffffff' : '#999999';
+    const name = (affixName2 ? affixName2 : '') + wData2.name;
+    ctx.fillText(name.length > 7 ? name.substring(0,6)+'…' : name, wx + 28, slotY + 18);
+
+    // Damage
+    ctx.font = '9px monospace';
+    ctx.fillStyle = '#ff8888';
+    ctx.fillText('⚔' + wData2.damage, wx + 28, slotY + 36);
+
+    // Slot number
+    ctx.font = '9px monospace';
+    ctx.fillStyle = '#666666';
+    ctx.fillText('#' + (i + 1), wx + slotW - 22, slotY + 18);
   }
 
-  // Skill status
+  // Skill status (right side of bottom bar)
   const cd = CHARACTERS[player.charClass];
   const ready = player.skillTimer <= 0;
   ctx.fillStyle = ready ? '#00ff88' : '#ff4444';
