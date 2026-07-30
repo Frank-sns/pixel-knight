@@ -1,0 +1,6 @@
+[      14ms] [LOG] Pixel Knight — ready @ http://localhost:8080/pixel_knight.html:2435
+[    5158ms] [LOG] Dungeon generated: {rooms: Array(8), corridors: Array(6), floorNum: 1, startRoomId: 0} @ http://localhost:8080/pixel_knight.html:2429
+[    6285ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8080/favicon.ico:0
+[25827613ms] [LOG] Pixel Knight — ready @ http://localhost:8080/pixel_knight.html:2613
+[25829455ms] [LOG] Dungeon generated: {rooms: Array(6), corridors: Array(3), floorNum: 1, startRoomId: 0} @ http://localhost:8080/pixel_knight.html:2607
+[25829515ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8080/favicon.ico:0

@@ -1,0 +1,6 @@
+[    2683ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ https://ids.hit.edu.cn/authserver/login?service=http%3A%2F%2Fhitgs.hit.edu.cn%2F2026%2F0727%2Fc17343a398435%2Fpage.psp:0
+[    2686ms] [LOG] Loading script from: https://ids.hit.edu.cn/authserver/cusHitnew/static/common/ua-parser.min.js @ https://ids.hit.edu.cn/authserver/cusHitnew/static/common/common-header.js?v=20260703.154014:242
+[    2686ms] [LOG] Loading script from: https://ids.hit.edu.cn/authserver/cusHitnew/static/common/md5.min.js @ https://ids.hit.edu.cn/authserver/cusHitnew/static/common/common-header.js?v=20260703.154014:242
+[    2787ms] [LOG] Successfully loaded: https://ids.hit.edu.cn/authserver/cusHitnew/static/common/md5.min.js @ https://ids.hit.edu.cn/authserver/cusHitnew/static/common/common-header.js?v=20260703.154014:248
+[    2908ms] [LOG] Successfully loaded: https://ids.hit.edu.cn/authserver/cusHitnew/static/common/ua-parser.min.js @ https://ids.hit.edu.cn/authserver/cusHitnew/static/common/common-header.js?v=20260703.154014:248
+[    2931ms] [LOG] Generated and stored fingerprint @ https://ids.hit.edu.cn/authserver/cusHitnew/static/common/common-header.js?v=20260703.154014:23

@@ -1,0 +1,2 @@
+[      79ms] [LOG] Dungeon generated: {rooms: Array(9), corridors: Array(9), floorNum: 1, startRoomId: 0} @ http://localhost:8080/pixel_knight.html:578
+[      79ms] [LOG] Pixel Knight — player ready @ http://localhost:8080/pixel_knight.html:583

@@ -1,0 +1,37 @@
+- generic [ref=f1e2]:
+  - generic [ref=f1e6]:
+    - generic [ref=f1e7]: 统一身份认证
+    - generic [ref=f1e10]:
+      - form [ref=f1e15]
+      - paragraph [ref=f1e20]:
+        - link "哈工大APP" [ref=f1e21] [cursor=pointer]:
+          - /url: https://app.hit.edu.cn/
+        - text: 扫码登录
+      - paragraph [ref=f1e22]: 校本部节点
+    - generic [ref=f1e24]:
+      - link "账号登录" [ref=f1e27] [cursor=pointer]:
+        - /url: https://ids.hit.edu.cn/authserver/login?type=userNameLogin&service=http%3A%2F%2Fhitgs.hit.edu.cn%2F2026%2F0727%2Fc17343a398435%2Fpage.psp
+      - generic [ref=f1e28]:
+        - generic [ref=f1e32]:
+          - generic [ref=f1e33]:
+            - textbox "请输入学号/工号" [ref=f1e37]
+            - textbox "请输入密码" [active] [ref=f1e41]
+          - generic [ref=f1e42]:
+            - checkbox [ref=f1e43]
+            - generic [ref=f1e44]: 7天免登录
+          - link "登录" [ref=f1e46] [cursor=pointer]:
+            - /url: javascript:void(0);
+        - generic [ref=f1e47]:
+          - link "账号激活" [ref=f1e49] [cursor=pointer]:
+            - /url: https://ids.hit.edu.cn/retrieve-password/accountActivation/index.html?service=http%3A%2F%2Fhitgs.hit.edu.cn%2F2026%2F0727%2Fc17343a398435%2Fpage.psp
+          - generic [ref=f1e50]:
+            - generic [ref=f1e51]:
+              - link "遇到问题" [ref=f1e52] [cursor=pointer]:
+                - /url: https://ca.hit.edu.cn/info/1146/1135.htm
+              - text: "|"
+            - link "忘记密码？" [ref=f1e53] [cursor=pointer]:
+              - /url: https://ids.hit.edu.cn/retrieve-password/retrievePassword/index.html?service=http%3A%2F%2Fhitgs.hit.edu.cn%2F2026%2F0727%2Fc17343a398435%2Fpage.psp
+  - generic [ref=f1e54]: Copyright 2025 哈尔滨工业大学 技术支持：网络安全和信息化办公室
+  - generic [ref=f1e57] [cursor=pointer]:
+    - button "Eng" [ref=f1e58]
+    - button "中文" [ref=f1e59]

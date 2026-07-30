@@ -1,0 +1,3 @@
+[      75ms] [LOG] Dungeon generated: {rooms: Array(7), corridors: Array(5), floorNum: 1, startRoomId: 0} @ http://localhost:8080/pixel_knight.html:838
+[      75ms] [LOG] Pixel Knight — player ready @ http://localhost:8080/pixel_knight.html:843
+[     128ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8080/favicon.ico:0

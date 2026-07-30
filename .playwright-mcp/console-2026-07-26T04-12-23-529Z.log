@@ -1,0 +1,2 @@
+[      80ms] [LOG] Pixel Knight — shell ready @ http://127.0.0.1:8765/pixel_knight.html:69
+[      92ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://127.0.0.1:8765/favicon.ico:0

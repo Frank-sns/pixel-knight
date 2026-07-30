@@ -295,7 +295,7 @@ resizeCanvas();
 // === INPUT ===
 const keys = {};
 const mouse = { x: 0, y: 0, down: false, worldX: 0, worldY: 0 };
-window.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefault(); });
+window.addEventListener('keydown', e => { if (!e.repeat) keys[e.code] = true; e.preventDefault(); });
 window.addEventListener('keyup', e => { keys[e.code] = false; e.preventDefault(); });
 canvas.addEventListener('mousemove', e => {
   const rect = canvas.getBoundingClientRect();
@@ -851,6 +851,9 @@ function createEnemy(type, x, y) {
       this.flashTimer = 0.1;
       if (this.hp <= 0) { this.alive = false; player.coins += this.coins;
         floatingTexts.push({x: this.x, y: this.y, text: '+' + this.coins + '💰', life: 1.0, color: '#ffdd00', vy: -60});
+        // Drop loot on ground
+        if (Math.random() < 0.35) spawnDrop(this.x, this.y, 'coin_pile');
+        if (Math.random() < 0.12) spawnDrop(this.x, this.y, 'heart');
         if (player.buffs.lifesteal > 0) { player.hp = Math.min(player.maxHp, player.hp + 1); }
         // Lightning chain on death
         if (this.state.lightningMark) {
@@ -1423,7 +1426,7 @@ function generateFloor(floorNum) {
   const branchCells = [];
   for (let gx = 0; gx < GRID_COLS; gx++) {
     for (let gy = 0; gy < GRID_ROWS; gy++) {
-      if (!usedCells.has(`${gx},${gy}`) && Math.random() < 0.35) {
+      if (!usedCells.has(`${gx},${gy}`) && Math.random() < 0.45) {
         branchCells.push({x: gx, y: gy});
         usedCells.add(`${gx},${gy}`);
       }
@@ -1444,7 +1447,9 @@ function generateFloor(floorNum) {
 
   // Branch rooms
   const branchRooms = [];
-  const branchTypes = [ROOM_TYPE.CHEST, ROOM_TYPE.SHOP, ROOM_TYPE.COMBAT, ROOM_TYPE.COMBAT];
+  // Ensure first two branches are always chest + shop
+  const branchTypes = [ROOM_TYPE.CHEST, ROOM_TYPE.SHOP];
+  while (branchTypes.length < branchCells.length) branchTypes.push(ROOM_TYPE.COMBAT);
   for (let i = 0; i < branchCells.length; i++) {
     const bc = branchCells[i];
     const rType = branchTypes[i % branchTypes.length];
@@ -1588,11 +1593,18 @@ function renderRoom(ctx, room) {
     ctx.fillRect(-7, -20, 14, 5);
     ctx.fillRect(-11, -14, 22, 3);
     ctx.restore();
-    // Label
-    ctx.fillStyle = '#ccaa88';
-    ctx.font = '10px monospace';
+    // Label + interaction hint
+    ctx.fillStyle = '#ffcc00';
+    ctx.font = 'bold 13px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText('🎩 商人', room.cx, room.cy + 75);
+    ctx.fillText('🎩 商人 [按 E 交易]', room.cx, room.cy + 75);
+    // Pulsing circle under shopkeeper
+    const spulse = 1 + Math.sin(Date.now()/600) * 0.2;
+    ctx.strokeStyle = 'rgba(255,204,0,0.4)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(room.cx, room.cy + 40, 35 * spulse, 0, Math.PI*2);
+    ctx.stroke();
   }
   // Chest room visual
   if (room.type === ROOM_TYPE.CHEST && !room.cleared) {
@@ -2381,28 +2393,25 @@ function update(dt) {
   if (keys['KeyE']) {
     keys['KeyE'] = false;
     if (gameState === STATE.PLAYING) {
-      // Pickup nearby drops
+      // Pickup nearby drops (increased range to 65px)
       for (let i = drops.length - 1; i >= 0; i--) {
         const d = drops[i];
         const dx = player.x - d.x, dy = player.y - d.y;
-        if (Math.sqrt(dx*dx + dy*dy) < 40) {
+        if (Math.sqrt(dx*dx + dy*dy) < 65) {
           pickupItem(d);
           drops.splice(i, 1);
+          break; // pick up one at a time
         }
       }
       // Chest room interaction
       const room = getCurrentRoom();
       if (room && room.type === ROOM_TYPE.CHEST && !room.cleared) {
         const cdx = player.x - room.cx, cdy = player.y - room.cy;
-        if (Math.sqrt(cdx*cdx + cdy*cdy) < 60) {
+        if (Math.sqrt(cdx*cdx + cdy*cdy) < 100) {
           SFX.pickup();
           showMessage('打开宝箱!', 2000);
-          if (Math.random() < TUNING.dropChanceWeapon) {
-            spawnRandomWeapon(room.cx, room.cy - 20);
-          }
-          if (Math.random() < TUNING.dropChanceHeart) {
-            spawnDrop(room.cx + 30, room.cy, 'heart');
-          }
+          spawnRandomWeapon(room.cx, room.cy - 20);
+          if (Math.random() < 0.7) spawnDrop(room.cx + 30, room.cy, 'heart');
           spawnDrop(room.cx - 30, room.cy, 'coin_pile');
           room.cleared = true;
         }
@@ -2411,8 +2420,9 @@ function update(dt) {
       if (room && room.type === ROOM_TYPE.SHOP && !room.cleared) {
         const sx = room.cx, sy = room.cy + 40;
         const sdx = player.x - sx, sdy = player.y - sy;
-        if (Math.sqrt(sdx*sdx + sdy*sdy) < 60) {
+        if (Math.sqrt(sdx*sdx + sdy*sdy) < 100) {
           openShop();
+          return;
         }
       }
     } else if (gameState === STATE.SHOP) {
