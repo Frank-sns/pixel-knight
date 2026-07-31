@@ -64,7 +64,12 @@ const ENEMY_DATA = {
   bomber:   { name:'自爆虫',   hp:10, speed:180, damage:3, radius:11, color:'#ff6622', floor:2, behavior:'kamikaze', score:20, coins:2 },
   knight_enemy:{ name:'闪电骑士', hp:18, speed:160, damage:2, radius:11, color:'#ffcc00', floor:3, behavior:'dash', score:30, coins:3 },
   beholder: { name:'眼魔',     hp:16, speed:50,  damage:1, radius:13, color:'#ff4488', floor:3, behavior:'spin_laser', fireRate:2, score:30, coins:3 },
-  golem:    { name:'石像守卫', hp:25, speed:40,  damage:2, radius:15, color:'#888877', floor:3, behavior:'throw_rock', fireRate:2.5, score:35, coins:4 }
+  golem:    { name:'石像守卫', hp:25, speed:40,  damage:2, radius:15, color:'#888877', floor:3, behavior:'throw_rock', fireRate:2.5, score:35, coins:4 },
+  // Floors 4-6
+  wraith:   { name:'幽灵',     hp:20, speed:200, damage:2, radius:10, color:'#aaccff88', floor:4, behavior:'circle_dive', score:40, coins:5 },
+  pyro:     { name:'烈焰法师', hp:22, speed:90,  damage:2, radius:11, color:'#ff4422', floor:4, behavior:'shoot_burst', fireRate:0.6, score:40, coins:5 },
+  lancer:   { name:'枪骑士',   hp:28, speed:180, damage:3, radius:13, color:'#ff8844', floor:5, behavior:'dash', score:45, coins:5 },
+  overlord: { name:'霸主',     hp:35, speed:60,  damage:3, radius:16, color:'#ff0044', floor:6, behavior:'spin_laser', fireRate:1.5, score:50, coins:6 }
 };
 
 // === BOSS DATA ===
@@ -117,6 +122,29 @@ const BOSS_DATA = {
       { threshold:0.66, attacks:['clone','cross_laser'], moveSpeed:90 },
       { threshold:0.33, attacks:['bullet_hell','fire_aura'], moveSpeed:140 }
     ]
+  },
+  // Floor 4-6 bosses
+  void_reaper: {
+    name:'虚空收割者', floor:4, hp:240, radius:24, color:'#440066',
+    phases: [
+      { threshold:1.0, attacks:['bullet_hell','teleport','summon'], moveSpeed:80 },
+      { threshold:0.5, attacks:['spin_lasers','dash_combo'], moveSpeed:130 }
+    ]
+  },
+  phoenix: {
+    name:'不死凤凰', floor:5, hp:280, radius:28, color:'#ff6600',
+    phases: [
+      { threshold:1.0, attacks:['fire_cone','fire_tracking','dive'], moveSpeed:90 },
+      { threshold:0.4, attacks:['fire_aura','rock_throw_fast','fire_tracking'], moveSpeed:130 }
+    ]
+  },
+  titan: {
+    name:'泰坦巨像', floor:6, hp:350, radius:34, color:'#ffffff',
+    phases: [
+      { threshold:1.0, attacks:['ground_slam','rock_throw','stone_wall'], moveSpeed:35 },
+      { threshold:0.5, attacks:['ground_slam','rock_throw_fast','bullet_hell'], moveSpeed:60 },
+      { threshold:0.25, attacks:['bullet_hell','fire_aura','rock_throw_fast'], moveSpeed:90 }
+    ]
   }
 };
 
@@ -129,14 +157,19 @@ const BOSS_BUFFS = [
    { name:'击杀回血', apply:()=>{ player.buffs.lifesteal=(player.buffs.lifesteal||0)+1; }}],
   [{ name:'伤害+20%', apply:()=>{ player.buffs.damageMult+=0.20; }},
    { name:'生命上限+1', apply:()=>{ player.maxHp+=1; player.hp+=1; }},
-   { name:'弹幕穿透+1', apply:()=>{ player.buffs.pierce+=1; }}]
+   { name:'弹幕穿透+1', apply:()=>{ player.buffs.pierce+=1; }}],
+  [{ name:'伤害+25%', apply:()=>{ player.buffs.damageMult+=0.25; }},
+   { name:'生命上限+2', apply:()=>{ player.maxHp+=2; player.hp+=2; }}],
+  [{ name:'伤害+30%', apply:()=>{ player.buffs.damageMult+=0.30; }},
+   { name:'移速+20%', apply:()=>{ player.buffs.speedMult+=0.20; }}],
+  [{ name:'全属性提升!', apply:()=>{ player.buffs.damageMult+=0.25; player.maxHp+=2; player.hp+=2; player.buffs.speedMult+=0.15; }}]
 ];
 
 // === TUNING ===
 const TUNING = {
-  enemyHpScale: [0.9, 1.2, 1.6],       // per floor — moderate challenge
-  enemyDmgScale: [0.7, 0.9, 1.1],        // reduced for better survivability
-  bossHpScale: [1.0, 1.3, 1.6],
+  enemyHpScale: [0.9, 1.2, 1.6, 2.0, 2.4, 2.8],       // per floor
+  enemyDmgScale: [0.7, 0.9, 1.1, 1.3, 1.5, 1.7],
+  bossHpScale: [1.0, 1.3, 1.6, 1.9, 2.2, 2.5],
   dropChanceWeapon: 0.40,
   dropChanceHeart: 0.35,
   dropChanceCoin: 0.50,
@@ -1306,7 +1339,8 @@ function startBossFight(bossType) {
 function onBossDefeated() {
   const room = getCurrentRoom();
   const defeatedBossType = boss.type;
-  const isFinalBoss = (defeatedBossType === 'shadow_lord');
+  // Victory if all bosses on floor 6 defeated (and queue is empty)
+  const isFinalFloor = (dungeon.floorNum >= 6 && bossQueue.length === 0);
 
   // Clean up boss state
   boss = null;
@@ -1330,7 +1364,7 @@ function onBossDefeated() {
   room.cleared = true;
 
   // Drop buff based on floor (non-final bosses only)
-  if (!isFinalBoss) {
+  if (!isFinalFloor) {
     const floorIdx = dungeon.floorNum - 1;
     const floorBuffs = BOSS_BUFFS[floorIdx] || [];
     if (floorBuffs.length > 0) {
@@ -1344,11 +1378,13 @@ function onBossDefeated() {
   // Drop health
   if (room) spawnDrop(room.cx - 30, room.cy, 'heart');
 
-  if (isFinalBoss) {
+  if (isFinalFloor) {
     gameState = STATE.VICTORY;
     saveHighScore();
+    SFX.bossExplosion();
   } else {
     advanceFloor();
+    gameState = STATE.PLAYING;
   }
 }
 
@@ -1656,18 +1692,22 @@ function enterRoom(roomId) {
   // Boss room — start boss fight(s) per floor
   if (room.type === ROOM_TYPE.BOSS && !room.cleared) {
     bossQueue = [];
-    if (dungeon.floorNum === 1) {
-      const floor1Bosses = Object.keys(BOSS_DATA).filter(k => BOSS_DATA[k].floor === 1);
-      bossQueue.push(floor1Bosses[randInt(0, floor1Bosses.length - 1)]);
-    } else if (dungeon.floorNum === 2) {
-      const floor2Bosses = Object.keys(BOSS_DATA).filter(k => BOSS_DATA[k].floor === 2);
-      const shuffled = [...floor2Bosses].sort(() => Math.random() - 0.5);
-      bossQueue.push(shuffled[0], shuffled[1]);
+    const floorBosses = Object.keys(BOSS_DATA).filter(k => BOSS_DATA[k].floor === dungeon.floorNum);
+    if (floorBosses.length === 0) {
+      // Fallback: use any boss from floor 3+
+      const allBosses = Object.keys(BOSS_DATA);
+      bossQueue.push(allBosses[randInt(0, allBosses.length - 1)]);
+    } else if (dungeon.floorNum <= 2) {
+      bossQueue.push(floorBosses[randInt(0, floorBosses.length - 1)]);
+      if (dungeon.floorNum === 2) bossQueue.push(floorBosses[randInt(0, floorBosses.length - 1)]);
+    } else if (dungeon.floorNum <= 5) {
+      const shuffled = [...floorBosses].sort(() => Math.random() - 0.5);
+      bossQueue.push(shuffled[0], shuffled.length > 1 ? shuffled[1] : shuffled[0]);
     } else {
-      // Floor 3: 2 random + fixed shadow_lord
-      const floor3Bosses = Object.keys(BOSS_DATA).filter(k => BOSS_DATA[k].floor === 3 && k !== 'shadow_lord');
-      const shuffled = [...floor3Bosses].sort(() => Math.random() - 0.5);
-      bossQueue.push(shuffled[0], shuffled[1], 'shadow_lord');
+      // Floor 6: final boss gauntlet — 3 bosses
+      const shuffled = [...floorBosses].sort(() => Math.random() - 0.5);
+      bossQueue.push(shuffled[0], shuffled.length > 1 ? shuffled[1] : shuffled[0]);
+      if (shuffled.length > 2) bossQueue.push(shuffled[2]);
     }
     startBossFight(bossQueue.shift());
   }
@@ -1997,25 +2037,19 @@ function renderParticles(ctx) {
 
 // === FLOOR PROGRESSION ===
 function advanceFloor() {
-  if (dungeon.floorNum >= 3) {
-    // Should not normally happen (floor 3 boss is shadow_lord → victory),
-    // but if a non-shadow-lord boss was beaten on floor 3, regenerate floor 3
-    enemies = [];
-    bullets = [];
-    enemyBullets = [];
-    dungeon = generateFloor(3);
-    currentRoomIdx = dungeon.startRoomId;
-    enterRoom(currentRoomIdx);
-    player.hp = player.maxHp;
-    return;
-  }
+  const MAX_FLOORS = 6;
   // Screen flash white
   flashScreen(0.5);
-  // Clear old enemies and bullets from previous floor
+  // Clear old enemies and bullets
   enemies = [];
   bullets = [];
   enemyBullets = [];
-  // Generate next floor
+  // Generate next floor (or victory if max reached)
+  if (dungeon.floorNum >= MAX_FLOORS) {
+    gameState = STATE.VICTORY;
+    saveHighScore();
+    return;
+  }
   dungeon = generateFloor(dungeon.floorNum + 1);
   currentRoomIdx = dungeon.startRoomId;
   enterRoom(currentRoomIdx);
@@ -2840,7 +2874,7 @@ function renderVictory(ctx) {
   ctx.fillText('🏆 胜 利 🏆', GW/2, 250);
   ctx.font = '18px monospace';
   ctx.fillStyle = '#aaaaaa';
-  ctx.fillText('击败了暗影领主! 金币: ' + player.coins, GW/2, 310);
+  ctx.fillText('通关! 到达第' + (dungeon?.floorNum||6) + '层 | 金币: ' + player.coins, GW/2, 310);
   ctx.fillText('按 Enter 返回菜单', GW/2, 380);
   ctx.textAlign = 'start';
 }
